@@ -33,6 +33,15 @@ class ChromaQueryResult(TypedDict):
     relevance: float
 
 
+class ResumeVersionNotFoundError(ValueError):
+    """指定简历版本不存在时抛出的稳定错误。"""
+
+    def __init__(self, resume_version: str) -> None:
+        self.code = "RESUME_VERSION_NOT_FOUND"
+        self.resume_version = resume_version
+        super().__init__(f"Resume version not found: {resume_version}")
+
+
 class ChromaResumeStore:
     """简历 Chroma 访问适配器。"""
 
@@ -85,23 +94,25 @@ class ChromaResumeStore:
             metadatas=[dict(chunk) for chunk in chunks],
         )
 
-    def query(self, query_text: str, top_k: int = RAG_TOP_K) -> list[ChromaQueryResult]:
-        """执行固定 top-k 与阈值过滤的检索。
+    def query(self, query_text: str, resume_version: str) -> list[ChromaQueryResult]:
+        """执行固定 top-k、版本隔离与阈值过滤的检索。
 
         参数：
             query_text: 查询文本。
-            top_k: 请求 Chroma 返回的最多候选数，默认取冻结常量。
+            resume_version: 目标简历版本，仅允许在该版本内检索。
 
         返回：
             relevance 不低于阈值的证据列表，保留 chunk_id、quote 和 relevance。
         """
 
         self._validate_collection_metadata()
+        self._ensure_resume_version_exists(resume_version)
         vectors = self._embedding_model.encode([query_text])
         result = self._collection.query(
             query_embeddings=vectors,
-            n_results=top_k,
+            n_results=RAG_TOP_K,
             include=["documents", "metadatas", "distances"],
+            where={"resume_version": resume_version},
         )
 
         rows: list[ChromaQueryResult] = []
@@ -122,6 +133,18 @@ class ChromaResumeStore:
             )
 
         return rows
+
+    def _ensure_resume_version_exists(self, resume_version: str) -> None:
+        """确认目标版本已存在，避免查询时无过滤回退到其他版本。
+
+        这里先用 Chroma metadata 过滤做存在性检查；若不存在，立即抛出稳定错误码，
+        由上层 Agent 转换成 LangGraph 的正常 state update。
+        """
+
+        lookup = self._collection.get(where={"resume_version": resume_version}, limit=1)
+        ids = lookup.get("ids", [])
+        if not ids:
+            raise ResumeVersionNotFoundError(resume_version)
 
     @property
     def collection_metadata(self) -> dict[str, Any]:

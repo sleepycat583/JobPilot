@@ -51,6 +51,7 @@ class JobAssistantState(TypedDict, total=False):
     jd_parsed: JDParsed | None
     match_result: MatchResult | None
     interview_state: InterviewState | None
+    resume_version: str | None
 
     review_status: ReviewStatus
     review_target: Literal["jd_parsed", "match_result", "interview_report"] | None

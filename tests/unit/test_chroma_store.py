@@ -22,6 +22,7 @@ class FakeCollection:
         }
         self.query_calls: list[dict[str, object]] = []
         self.upsert_calls: list[dict[str, object]] = []
+        self.get_calls: list[dict[str, object]] = []
 
     def query(self, **kwargs: object) -> dict[str, list[list[object]]]:
         self.query_calls.append(kwargs)
@@ -35,6 +36,13 @@ class FakeCollection:
             ]],
             "distances": [[0.2, 0.65, 0.8, 1.2]],
         }
+
+    def get(self, **kwargs: object) -> dict[str, list[str]]:
+        self.get_calls.append(kwargs)
+        where = kwargs.get("where", {})
+        if where == {"resume_version": "missing-v1"}:
+            return {"ids": []}
+        return {"ids": ["project-001"]}
 
     def upsert(self, **kwargs: object) -> None:
         self.upsert_calls.append(kwargs)
@@ -116,20 +124,48 @@ def test_chroma_store_query_applies_top_k_and_relevance_threshold(monkeypatch: p
     monkeypatch.setattr(chroma_store, "PersistentClient", fake_persistent_client)
 
     store = chroma_store.ChromaResumeStore(build_settings(), embedding_model)
-    results = store.query("java spring boot")
+    results = store.query("java spring boot", "2026-07-v1")
 
     assert embedding_model.calls == [["java spring boot"]]
+    assert collection.get_calls == [{"where": {"resume_version": "2026-07-v1"}, "limit": 1}]
     assert collection.query_calls == [
         {
             "query_embeddings": [[0.1, 0.2, 0.3]],
             "n_results": RAG_TOP_K,
             "include": ["documents", "metadatas", "distances"],
+            "where": {"resume_version": "2026-07-v1"},
         }
     ]
     assert results == [
         {"chunk_id": "project-001", "quote": "strong evidence", "relevance": 0.8},
         {"chunk_id": "experience-002", "quote": "borderline evidence", "relevance": RAG_RELEVANCE_THRESHOLD},
     ]
+
+
+@pytest.mark.core_agent_tests
+def test_chroma_store_missing_resume_version_fails_without_embedding_or_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证不存在的 resume_version 直接报稳定错误，不继续做向量检索。"""
+
+    recorder: dict[str, object] = {}
+    collection = FakeCollection()
+    embedding_model = FakeEmbeddingModel()
+
+    def fake_persistent_client(*, path: str) -> FakeClient:
+        return FakeClient(path=path, collection=collection, recorder=recorder)
+
+    monkeypatch.setattr(chroma_store, "PersistentClient", fake_persistent_client)
+
+    store = chroma_store.ChromaResumeStore(build_settings(), embedding_model)
+
+    with pytest.raises(chroma_store.ResumeVersionNotFoundError) as exc_info:
+        store.query("java spring boot", "missing-v1")
+
+    assert exc_info.value.code == "RESUME_VERSION_NOT_FOUND"
+    assert embedding_model.calls == []
+    assert collection.query_calls == []
+    assert collection.get_calls == [{"where": {"resume_version": "missing-v1"}, "limit": 1}]
 
 
 @pytest.mark.core_agent_tests

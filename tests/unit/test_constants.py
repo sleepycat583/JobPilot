@@ -10,6 +10,7 @@ def test_constants_exist_with_expected_types() -> None:
     """确认冻结常量存在且类型稳定，防止后续被误删或改错类型。"""
 
     assert isinstance(constants.EMBEDDING_MODEL, str)
+    assert isinstance(constants.EMBEDDING_DIMENSION, int)
     assert isinstance(constants.CHROMA_COLLECTION_NAME, str)
     assert isinstance(constants.RAG_TOP_K, int)
     assert isinstance(constants.RAG_RELEVANCE_THRESHOLD, float)

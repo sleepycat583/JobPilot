@@ -7,6 +7,9 @@
 # 文档 §3.3：Embedding 固定为唯一模型，不支持运行时切换。
 EMBEDDING_MODEL = "BAAI/bge-m3"
 
+# 文档 §3.3：collection metadata 需固定记录 bge-m3 向量维度。
+EMBEDDING_DIMENSION = 1024
+
 # 文档 §3.3：Chroma collection 固定为 resume_chunks。
 CHROMA_COLLECTION_NAME = "resume_chunks"
 

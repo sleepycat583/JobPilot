@@ -1,0 +1,13 @@
+.env
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+# .venv 用于日常开发；.venv-clean 仅用于独立验证 pyproject.toml 依赖是否自洽。
+.venv/
+.venv-clean/
+data/chroma/

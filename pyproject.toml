@@ -1,0 +1,38 @@
+[project]
+name = "job-assistant"
+version = "0.1.0"
+description = "Week 1 skeleton for the job-assistant multi-agent system"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "langgraph==0.2.34",
+  "langchain==0.3.3",
+  "langchain-openai==0.2.2",
+  "fastapi==0.115.0",
+  "pydantic==2.9.2",
+  "pydantic-settings==2.5.2",
+  "chromadb==0.5.5",
+  "sentence-transformers==3.1.1",
+  "transformers==4.45.2",
+  "torch==2.4.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.3",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# data/ 目录仅用于运行时数据和测试夹具，不是 Python 包，因此显式限制只打包 app。
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+  "core_agent_tests: 标记 Week 1-2 的核心 Agent/Graph/Schema 用例，与后续外围工程测试隔离",
+]

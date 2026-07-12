@@ -8,21 +8,31 @@ from langgraph.graph import END
 
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
+from app.schemas.jd import JDParsed, SkillRequirement
 
 
 @dataclass
 class FakeChatModel:
-    result: Any
+    responses: list[Any]
     invoke_calls: int = 0
     prompts: list[str] = field(default_factory=list)
 
     def invoke(self, prompt: str) -> Any:
-        self.invoke_calls += 1
         self.prompts.append(prompt)
-        return self.result
+        response = self.responses[min(self.invoke_calls, len(self.responses) - 1)]
+        self.invoke_calls += 1
+        return response
 
     def bind(self, **_: Any) -> "FakeChatModel":
         return self
+
+
+@dataclass
+class FakeResumeStore:
+    mapping: dict[tuple[str, str], list[dict[str, Any]]]
+
+    def query(self, query_text: str, resume_version: str) -> list[dict[str, Any]]:
+        return self.mapping.get((query_text, resume_version), [])
 
 
 def _stream_node_names(compiled_graph: Any, initial_state: dict[str, object]) -> list[str]:
@@ -38,6 +48,63 @@ def _compiled_graph_edges(compiled_graph: Any) -> set[tuple[str, str]]:
     return {(edge.source, edge.target) for edge in compiled_graph.get_graph().edges}
 
 
+def _build_resume_match_jd() -> JDParsed:
+    return JDParsed(
+        job_title="Java后端工程师",
+        seniority="mid",
+        company_name=None,
+        responsibilities=["API design"],
+        skills=[SkillRequirement(name="Java", category="language", priority="must", evidence="精通 Java")],
+        experience_requirements=["3年以上后端开发经验"],
+        education_requirements=[],
+        interview_focus=[],
+        company_context=[],
+        ambiguities=[],
+        source_language="zh-CN",
+    )
+
+
+def _build_llm_analysis(responsibility_relevance: float) -> str:
+    return (
+        '{"must_items":[{"requirement":"Java","status":"transferable","rationale":"ok",'
+        '"evidence":[{"chunk_id":"java-1","quote":"Java"}],"recent":true,"quantified":true}],'
+        f'"responsibility_items":[{{"requirement":"API design","status":"transferable","rationale":"ok",'
+        f'"evidence":[{{"chunk_id":"api-1","quote":"API design {responsibility_relevance}"}}],'
+        '"recent":true,"quantified":true}],'
+        '"preferred_items":[],'
+        '"constraint_items":[{"requirement":"3年以上后端开发经验","status":"satisfied","rationale":"ok",'
+        '"evidence":[{"chunk_id":"exp-1","quote":"3 years"}]}],'
+        '"strengths":["strong"],"gaps":[],"recommendations":[]}'
+    )
+
+
+def _build_graph_for_resume_match(score: float) -> Any:
+    responsibility_relevance = 0.4 if score < 60.0 else 0.4286
+    return build_graph(
+        FakeChatModel(
+            [
+                '{"route":"resume_match","confidence":0.9,"reason":"match","task_queue":[]}',
+                _build_llm_analysis(responsibility_relevance),
+            ]
+        ),
+        resume_store=FakeResumeStore(
+            {
+                ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+                ("API design", "2026-07-v1"): [
+                    {
+                        "chunk_id": "api-1",
+                        "quote": f"API design {responsibility_relevance}",
+                        "relevance": responsibility_relevance,
+                    }
+                ],
+                ("3年以上后端开发经验", "2026-07-v1"): [
+                    {"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}
+                ],
+            }
+        ),
+    )
+
+
 @pytest.mark.core_agent_tests
 @pytest.mark.parametrize(
     ("router_output", "expected_node"),
@@ -50,7 +117,7 @@ def _compiled_graph_edges(compiled_graph: Any) -> set[tuple[str, str]]:
     ],
 )
 def test_compiled_graph_routes_to_expected_node(router_output: str, expected_node: str) -> None:
-    graph = build_graph(FakeChatModel(router_output))
+    graph = build_graph(FakeChatModel([router_output]))
 
     initial_state = {"user_input": "测试输入"}
     if expected_node == "jd_parser":
@@ -64,7 +131,7 @@ def test_compiled_graph_routes_to_expected_node(router_output: str, expected_nod
 
 @pytest.mark.core_agent_tests
 def test_compiled_graph_handles_none_route_decision_via_error_node() -> None:
-    graph = build_graph(FakeChatModel('{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}'))
+    graph = build_graph(FakeChatModel(['{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}']))
     oversized_input = "x" * (MAX_INPUT_LENGTH + 1)
 
     node_names = _stream_node_names(graph, {"user_input": oversized_input})
@@ -78,7 +145,7 @@ def test_compiled_graph_handles_none_route_decision_via_error_node() -> None:
 
 @pytest.mark.core_agent_tests
 def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
-    graph = build_graph(FakeChatModel('{"route":"unknown","confidence":0.9,"reason":"bad","task_queue":[]}'))
+    graph = build_graph(FakeChatModel(['{"route":"unknown","confidence":0.9,"reason":"bad","task_queue":[]}']))
 
     node_names = _stream_node_names(graph, {"user_input": "测试非法路由"})
 
@@ -90,20 +157,57 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
 
 
 @pytest.mark.core_agent_tests
-@pytest.mark.parametrize(
-    "terminal_node",
-    [
-        "jd_parser",
-        "resume_matcher",
-        "interview_simulator",
-        "clarify_node",
-        "out_of_scope_node",
-        "error_node",
-    ],
-)
-def test_compiled_graph_declares_explicit_end_edge_for_terminal_nodes(terminal_node: str) -> None:
-    graph = build_graph(FakeChatModel('{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}'))
+def test_compiled_graph_declares_resume_match_low_score_gate_and_finalize_edges() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}']))
 
     edges = _compiled_graph_edges(graph)
 
-    assert (terminal_node, END) in edges
+    assert ("jd_parser", END) in edges
+    assert ("resume_matcher", "low_score_gate") in edges
+    assert ("interview_simulator", END) in edges
+    assert ("clarify_node", END) in edges
+    assert ("out_of_scope_node", END) in edges
+    assert ("error_node", END) in edges
+    assert ("finalize_node", END) in edges
+
+
+@pytest.mark.core_agent_tests
+def test_low_score_gate_sets_review_status_and_stops_before_finalize() -> None:
+    graph = _build_graph_for_resume_match(59.9)
+
+    result = graph.invoke(
+        {
+            "user_input": "测试低分 Gate",
+            "resume_version": "2026-07-v1",
+            "jd_parsed": _build_resume_match_jd(),
+        }
+    )
+
+    assert result["match_result"].total_score == 59.9
+    assert result["match_result"].low_score_review_required is True
+    assert result["review_status"] == "in_review"
+    assert result["review_target"] == "match_result"
+    assert result["current_node"] == "low_score_gate"
+    assert "finalize_node" not in [event["node"] for event in result["execution_history"]]
+    assert result.get("final_output") is None
+
+
+@pytest.mark.core_agent_tests
+def test_low_score_gate_allows_finalize_and_keeps_final_output_empty() -> None:
+    graph = _build_graph_for_resume_match(60.0)
+
+    result = graph.invoke(
+        {
+            "user_input": "测试高分 Gate",
+            "resume_version": "2026-07-v1",
+            "jd_parsed": _build_resume_match_jd(),
+        }
+    )
+
+    assert result["match_result"].total_score == 60.0
+    assert result["match_result"].low_score_review_required is False
+    assert result.get("review_status") != "in_review"
+    assert result["current_node"] == "finalize_node"
+    assert any(event["node"] == "low_score_gate" for event in result["execution_history"])
+    assert any(event["node"] == "finalize_node" for event in result["execution_history"])
+    assert result.get("final_output") is None

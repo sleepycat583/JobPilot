@@ -162,9 +162,9 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
 @pytest.mark.parametrize(
     ("source_node", "expected_target"),
     [
-        ("jd_parser", END),
+        ("jd_parser", "queue_dispatch"),
         ("resume_matcher", "prepare_low_score_review"),
-        ("interview_simulator", END),
+        ("interview_simulator", "queue_dispatch"),
         ("clarify_node", END),
         ("out_of_scope_node", END),
         ("error_node", END),

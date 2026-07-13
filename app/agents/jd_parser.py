@@ -55,7 +55,15 @@ def jd_parser_node(
             "jd_parsed": jd_parsed,
             "current_node": "jd_parser",
             "retry_count": {"jd_parser": result.retry_count},
-            "error_log": result.error_log,
+            "error_log": list(result.error_log)
+            + [
+                _build_error_entry(
+                    code=EXTRACTION_UNAVAILABLE_CODE,
+                    message="JD structured extraction was unavailable after all retries",
+                    retryable=False,
+                    attempt=result.retry_count,
+                )
+            ],
             "execution_history": [_build_event("jd_parser", "success", "technical_degraded")],
         }
 
@@ -65,6 +73,14 @@ def jd_parser_node(
 
     if _is_content_insufficient(gated):
         execution_detail = "content_insufficient"
+        error_log.append(
+            _build_error_entry(
+                code=CONTENT_INSUFFICIENT_CODE,
+                message="JD does not contain enough concrete requirements for resume matching",
+                retryable=False,
+                attempt=result.retry_count,
+            )
+        )
 
     if jd_input.allow_web_search and gated.company_name and search_backend is not None:
         search_result = search_company_background(gated.company_name, search_backend)

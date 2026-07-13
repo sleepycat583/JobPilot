@@ -90,6 +90,8 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
             reason=decision.reason,
             task_queue=[],
         )
+    elif decision.route in {"jd_parse", "resume_match", "mock_interview"} and not decision.task_queue:
+        decision = decision.model_copy(update={"task_queue": [decision.route]})
 
     return {
         "route_decision": decision,

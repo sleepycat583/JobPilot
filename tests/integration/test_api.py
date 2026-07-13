@@ -1,4 +1,4 @@
-"""Week1 FastAPI HTTP 集成验收。
+"""FastAPI HTTP 与完整 Graph 集成验收。
 
 测试通过 TestClient 调用真实编译 Graph；Chat Model 和简历存储均为 fake，
 不访问外部 LLM、Embedding 或 Chroma 服务。
@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -59,8 +60,8 @@ class FakeResumeStore:
         return self.mapping.get((query_text, resume_version), [])
 
 
-def _route(route: str) -> str:
-    return f'{{"route":"{route}","confidence":0.9,"reason":"test","task_queue":[]}}'
+def _route(route: str, task_queue: list[str] | None = None) -> str:
+    return json.dumps({"route": route, "confidence": 0.9, "reason": "test", "task_queue": task_queue or []})
 
 
 def _match_analysis(responsibility_relevance: float) -> str:
@@ -80,8 +81,10 @@ def _client_for(
     *,
     responsibility_relevance: float = 0.4286,
     missing_versions: set[str] | None = None,
+    jd_response: str = JD_PARSED_JSON,
+    task_queue: list[str] | None = None,
 ) -> TestClient:
-    model = FakeChatModel([_route("jd_parse"), JD_PARSED_JSON, _route("resume_match"), _match_analysis(responsibility_relevance)])
+    model = FakeChatModel([_route("jd_parse", task_queue or ["jd_parse", "resume_match"]), jd_response, _match_analysis(responsibility_relevance)])
     store = FakeResumeStore(
         {
             ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
@@ -103,7 +106,7 @@ def _client_for(
 
 
 def test_job_analysis_parses_jd_through_http_boundary() -> None:
-    with _client_for() as client:
+    with _client_for(task_queue=["jd_parse"]) as client:
         response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
 
     assert response.status_code == 200
@@ -111,6 +114,7 @@ def test_job_analysis_parses_jd_through_http_boundary() -> None:
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
     assert payload["match_result"] is None
     assert payload["error_log"] == []
+    assert payload["current_node"] == "finalize_node"
 
 
 def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
@@ -123,6 +127,33 @@ def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
     assert payload["match_result"]["total_score"] == 60.0
     assert payload["current_node"] == "finalize_node"
     assert payload["final_output"] is None
+
+
+def test_combined_analysis_stops_after_technical_jd_failure() -> None:
+    with _client_for(jd_response="not-json") as client:
+        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["match_result"] is None
+    assert payload["current_node"] == "error_node"
+    assert "JD_EXTRACTION_UNAVAILABLE" in {entry["code"] for entry in payload["error_log"]}
+    assert [event["node"] for event in payload["execution_history"]].count("resume_matcher") == 0
+
+
+def test_combined_analysis_stops_after_content_insufficient_jd() -> None:
+    insufficient_jd = json.dumps(
+        {"job_title": "unknown", "seniority": "unknown", "company_name": None, "responsibilities": [], "skills": [], "experience_requirements": [], "education_requirements": [], "interview_focus": [], "company_context": [], "ambiguities": [], "source_language": "zh-CN"}
+    )
+    with _client_for(jd_response=insufficient_jd) as client:
+        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["match_result"] is None
+    assert payload["current_node"] == "error_node"
+    assert "JD_CONTENT_INSUFFICIENT" in {entry["code"] for entry in payload["error_log"]}
+    assert [event["node"] for event in payload["execution_history"]].count("resume_matcher") == 0
 
 
 def test_job_analysis_exposes_low_score_review_status() -> None:

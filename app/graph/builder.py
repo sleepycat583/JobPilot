@@ -1,7 +1,7 @@
-"""Graph 最小拓扑构建。
+"""Graph 拓扑构建。
 
-本文件负责组装 Week1 的最小 StateGraph：Supervisor 路由、业务节点、
-以及低分 Gate 等确定性控制节点。真实业务逻辑仍由各自模块实现。
+本文件组装 Supervisor、顺序任务队列、业务节点和低分 Gate 等确定性控制节点。
+Worker 只产出业务结果；队列消费和下一跳选择始终由 Graph 控制节点负责。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agents.jd_parser import jd_parser_node
+from app.agents.jd_parser import CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE
 from app.agents.resume_matcher import resume_matcher_node
 from app.agents.supervisor import supervisor_node
 from app.graph.control_nodes import (
@@ -38,7 +39,7 @@ def build_graph(
     resume_store: ChromaResumeStore | Any | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ):
-    """构建并编译 Week1 最小图拓扑。
+    """构建并编译按 task_queue 顺序执行的图拓扑。
 
     参数：
         chat_model: 供 Supervisor / JD 解析 / 简历匹配复用的聊天模型。
@@ -60,6 +61,7 @@ def build_graph(
         return resume_matcher_node(state, chat_model, resume_store)
 
     graph.add_node("supervisor", supervisor_with_model)
+    graph.add_node("queue_dispatch", queue_dispatch_node)
     graph.add_node("jd_parser", jd_parser_with_dependencies)
     graph.add_node("resume_matcher", resume_matcher_with_dependencies)
     graph.add_node("low_score_gate", low_score_gate_node)
@@ -77,16 +79,31 @@ def build_graph(
         "supervisor",
         resolve_route_node,
         {
-            "jd_parser": "jd_parser",
-            "resume_matcher": "resume_matcher",
-            "interview_simulator": "interview_simulator",
+            "jd_parser": "queue_dispatch",
+            "resume_matcher": "queue_dispatch",
+            "interview_simulator": "queue_dispatch",
             "clarify_node": "clarify_node",
             "out_of_scope_node": "out_of_scope_node",
             "error_node": "error_node",
         },
     )
 
-    graph.add_edge("jd_parser", END)
+    graph.add_conditional_edges(
+        "queue_dispatch",
+        _resolve_queue_dispatch_route,
+        {
+            "jd_parser": "jd_parser",
+            "resume_matcher": "resume_matcher",
+            "interview_simulator": "interview_simulator",
+            "finalize": "finalize_node",
+            "error": "error_node",
+        },
+    )
+    graph.add_conditional_edges(
+        "jd_parser",
+        _resolve_jd_completion_route,
+        {"continue": "queue_dispatch", "error": "error_node"},
+    )
     graph.add_conditional_edges(
         "resume_matcher",
         _resolve_match_result_route,
@@ -97,13 +114,13 @@ def build_graph(
         "low_score_gate",
         _resolve_low_score_gate_route,
         {
-            "continue": "finalize_node",
+            "continue": "queue_dispatch",
             "cancel": "low_score_cancelled",
         },
     )
     graph.add_edge("finalize_node", END)
     graph.add_edge("low_score_cancelled", END)
-    graph.add_edge("interview_simulator", END)
+    graph.add_edge("interview_simulator", "queue_dispatch")
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
@@ -128,6 +145,45 @@ def resume_matcher_placeholder(_: JobAssistantState) -> dict[str, object]:
             "resume_version": "placeholder",
         },
     }
+
+
+def queue_dispatch_node(state: JobAssistantState) -> dict[str, object]:
+    """消费一个待执行任务并将剩余队列持久化到 State。
+
+    参数：
+        state: 包含 Supervisor 初始化的有序 `task_queue` 的全局状态。
+
+    返回：
+        覆盖更新后的剩余队列和调度执行轨迹；具体 Worker 由条件边选择。
+    """
+
+    task_queue = list(state.get("task_queue", []))
+    if not task_queue:
+        return {"current_node": "queue_dispatch"}
+    task = task_queue[0]
+    return {
+        "task_queue": task_queue[1:],
+        "current_node": task,
+        "execution_history": [_build_event("queue_dispatch", "success", f"dispatch:{task}")],
+    }
+
+
+def _resolve_queue_dispatch_route(state: JobAssistantState) -> str:
+    """根据队首任务确定下一 Worker，空队列进入最终节点。"""
+
+    current_node = state.get("current_node")
+    if current_node == "queue_dispatch":
+        return "finalize"
+    return {"jd_parse": "jd_parser", "resume_match": "resume_matcher", "mock_interview": "interview_simulator"}.get(current_node, "error")
+
+
+def _resolve_jd_completion_route(state: JobAssistantState) -> str:
+    """阻断无法用于简历匹配的 JD 降级结果，保留其原始错误码。"""
+
+    error_codes = {entry.get("code") for entry in state.get("error_log", [])}
+    if {CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE} & error_codes:
+        return "error"
+    return "continue"
 
 
 def _resolve_low_score_gate_route(state: JobAssistantState) -> str:

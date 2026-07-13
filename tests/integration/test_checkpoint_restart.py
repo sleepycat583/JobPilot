@@ -57,6 +57,52 @@ else:
 connection.close()
 '''
 
+COMBINED_CHILD_PROGRAM = r'''
+import json
+import sys
+from dataclasses import dataclass
+from typing import Any
+from langgraph.types import Command
+from app.graph.builder import build_graph
+from app.graph.checkpoint import open_sqlite_checkpointer
+
+JD_TEXT = "后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。"
+JD_JSON = '{"job_title":"Java后端工程师","seniority":"mid","company_name":null,"responsibilities":["API design"],"skills":[{"name":"Java","category":"language","priority":"must","evidence":"熟悉 Java"}],"experience_requirements":["3年以上后端开发经验"],"education_requirements":[],"interview_focus":[],"company_context":[],"ambiguities":[],"source_language":"zh-CN"}'
+MATCH_JSON = '{"must_items":[{"requirement":"Java","status":"transferable","rationale":"ok","evidence":[{"chunk_id":"java-1","quote":"Java"}],"recent":true,"quantified":true}],"responsibility_items":[{"requirement":"API design","status":"transferable","rationale":"ok","evidence":[{"chunk_id":"api-1","quote":"API design"}],"recent":true,"quantified":true}],"preferred_items":[],"constraint_items":[{"requirement":"3年以上后端开发经验","status":"satisfied","rationale":"ok","evidence":[{"chunk_id":"exp-1","quote":"3 years"}]}],"strengths":["strong"],"gaps":[],"recommendations":[]}'
+
+@dataclass
+class Model:
+    calls: int = 0
+    def invoke(self, prompt: str) -> str:
+        responses = ['{"route":"jd_parse","confidence":0.9,"reason":"combo","task_queue":["jd_parse","resume_match"]}', JD_JSON, MATCH_JSON]
+        value = responses[min(self.calls, len(responses) - 1)]
+        self.calls += 1
+        return value
+    def bind(self, **_: Any): return self
+
+class Store:
+    calls = 0
+    def query(self, text: str, version: str):
+        self.calls += 1
+        relevance = 0.4 if text == "API design" else 1.0
+        return [{"chunk_id": text, "quote": text, "relevance": relevance}]
+
+path, thread_id, phase = sys.argv[1:]
+checkpointer, connection = open_sqlite_checkpointer(path)
+model, store = Model(), Store()
+graph = build_graph(model, resume_store=store, checkpointer=checkpointer)
+config = {"configurable": {"thread_id": thread_id}}
+if phase == "interrupt":
+    graph.invoke({"thread_id": thread_id, "user_input": JD_TEXT, "resume_version": "resume-v1"}, config=config)
+    snapshot = graph.get_state(config)
+    print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+else:
+    action = "continue" if phase == "resume_continue" else "cancel"
+    result = graph.invoke(Command(resume={"action": action, "feedback": "confirmed"}), config=config)
+    print(json.dumps({"state": result, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+connection.close()
+'''
+
 
 def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
     """在新解释器中创建或恢复 Graph，证明结果不依赖父进程内存。"""
@@ -69,6 +115,49 @@ def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, o
         encoding="utf-8",
     )
     return json.loads(completed.stdout)
+
+
+def _run_combined_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
+    """在独立进程执行或恢复 JD+匹配组合图。"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", COMBINED_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.core_agent_tests
+@pytest.mark.parametrize(
+    ("resume_phase", "expected_status", "expected_node"),
+    [("resume_continue", "approved", "finalize_node"), ("resume_cancel", "rejected", "low_score_cancelled")],
+)
+def test_combined_task_low_score_checkpoint_recovers_without_replaying_workers(
+    tmp_path: Path, resume_phase: str, expected_status: str, expected_node: str
+) -> None:
+    """验证组合队列在低分中断后跨进程恢复，不重复执行已消费任务。"""
+
+    checkpoint_path = tmp_path / "combined-checkpoints.sqlite3"
+    thread_id = f"combined-{resume_phase}"
+    interrupted = _run_combined_child(checkpoint_path, thread_id, "interrupt")
+    baseline = interrupted["state"]
+    assert interrupted["interrupt"]["type"] == "low_match_score"
+    assert baseline["task_queue"] == []
+    assert interrupted["model_calls"] == 3
+    assert interrupted["store_calls"] == 3
+
+    resumed = _run_combined_child(checkpoint_path, thread_id, resume_phase)
+    state = resumed["state"]
+    assert state["review_status"] == expected_status
+    assert state["current_node"] == expected_node
+    assert resumed["model_calls"] == 0
+    assert resumed["store_calls"] == 0
+    history_nodes = [event["node"] for event in state["execution_history"]]
+    assert history_nodes.count("jd_parser") == 1
+    assert history_nodes.count("resume_matcher") == 1
 
 
 @pytest.mark.core_agent_tests

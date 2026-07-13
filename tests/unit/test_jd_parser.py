@@ -132,8 +132,9 @@ def test_jd_parser_marks_technical_degradation_separately_from_content_insuffici
     assert jd_parsed.skills == []
     assert any(item.startswith(f"{EXTRACTION_UNAVAILABLE_CODE}:") for item in jd_parsed.ambiguities)
     assert not any(item.startswith(f"{CONTENT_INSUFFICIENT_CODE}:") for item in jd_parsed.ambiguities)
-    assert len(result["error_log"]) == 3
-    assert all(entry["code"] == "LLM_SCHEMA_INVALID" for entry in result["error_log"])
+    assert len(result["error_log"]) == 4
+    assert result["error_log"][-1]["code"] == EXTRACTION_UNAVAILABLE_CODE
+    assert all(entry["code"] == "LLM_SCHEMA_INVALID" for entry in result["error_log"][:-1])
     assert result["error_log"][-1]["retryable"] is False
     assert result["retry_count"] == {"jd_parser": 2}
     assert result["execution_history"][0]["detail"] == "technical_degraded"

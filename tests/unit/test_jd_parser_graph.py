@@ -36,5 +36,5 @@ def test_graph_uses_real_jd_parser_node_output() -> None:
 
     result = graph.invoke({"user_input": "某后端岗位，要求熟悉 Python，负责接口设计与性能优化。"})
 
-    assert result["current_node"] == "jd_parser"
+    assert result["current_node"] == "finalize_node"
     assert result["jd_parsed"].job_title == "后端工程师"

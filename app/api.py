@@ -1,4 +1,4 @@
-"""Week1 最小 FastAPI HTTP 边界。
+"""FastAPI HTTP 边界。
 
 本模块把 JD 解析与简历匹配的 LangGraph 能力暴露为同步 HTTP 接口。
 生产运行时在 lifespan 中装配 Provider、Chroma 和 Graph；集成测试通过
@@ -28,7 +28,7 @@ from app.schemas.review import LowScoreReviewCommand
 
 
 class JobAnalysisRequest(BaseModel):
-    """Week1 JD 解析及可选简历匹配请求。
+    """JD 解析及可选简历匹配请求。
 
     参数：
         jd_text: 待解析的 JD 原文，最小长度沿用 JD Schema 的 20 字符约束。
@@ -94,7 +94,7 @@ def create_app(
         dependency_factory: 生产依赖构造函数，便于测试替换。
 
     返回：
-        已注册 Week1 HTTP 路由的 FastAPI 应用。
+        已注册 HTTP 路由的 FastAPI 应用。
     """
 
     @asynccontextmanager
@@ -122,47 +122,21 @@ def create_app(
         thread_id = str(uuid4())
         config = {"configurable": {"thread_id": thread_id}}
         try:
-            jd_state = graph.invoke(
+            state = graph.invoke(
                 {
                     "thread_id": thread_id,
-                    "user_input": "请解析以下岗位要求：\n" + request.jd_text,
-                },
-                config=config,
-            )
-        except Exception:
-            return _error_response(
-                ApiError(code="GRAPH_EXECUTION_FAILED", message="JD parsing graph execution failed"),
-                status_code=500,
-            )
-
-        if request.resume_version is None or jd_state.get("jd_parsed") is None:
-            return _state_response(jd_state, thread_id=thread_id, snapshot=_safe_get_state(graph, config))
-
-        # TODO(Week2+): 当前 Graph 尚未实现 task_queue 的原生消费。
-        # 临时在 API 层显式第二次调用同一个 Graph，把 JD 结果交给 matcher；完成
-        # §6.3 的确定性队列调度节点后，必须删除此编排并改为单次 Graph 执行。
-        try:
-            match_state = graph.invoke(
-                {
-                    "thread_id": thread_id,
-                    "user_input": "请评估这份简历与已解析岗位的匹配度。",
-                    "jd_parsed": jd_state["jd_parsed"],
+                    "user_input": _build_analysis_input(request),
                     "resume_version": request.resume_version,
                 },
                 config=config,
             )
         except Exception:
             return _error_response(
-                ApiError(code="GRAPH_EXECUTION_FAILED", message="Resume matching graph execution failed"),
+                ApiError(code="GRAPH_EXECUTION_FAILED", message="Job analysis graph execution failed"),
                 status_code=500,
             )
 
-        return _state_response(
-            match_state,
-            fallback_jd_parsed=jd_state["jd_parsed"],
-            thread_id=thread_id,
-            snapshot=_safe_get_state(graph, config),
-        )
+        return _state_response(state, thread_id=thread_id, snapshot=_safe_get_state(graph, config))
 
     @app.post("/v1/threads/{thread_id}/resume")
     def resume_low_score_review(thread_id: str, command: LowScoreReviewCommand) -> JSONResponse:
@@ -207,21 +181,18 @@ def _validate_request(request: JobAnalysisRequest) -> ApiError | None:
 
 def _state_response(
     state: dict[str, Any],
-    fallback_jd_parsed: Any | None = None,
     thread_id: str | None = None,
     snapshot: Any | None = None,
 ) -> JSONResponse:
-    """把 LangGraph State 规范化为 Week1 API 响应。
+    """把 LangGraph State 规范化为 API 响应。
 
     参数：
         state: 当前图执行的最终状态。
-        fallback_jd_parsed: 第二次 Graph 执行未回写 JD 时保留第一次结果。
-
     返回：
         包含业务产物、审核状态和结构化错误日志的 JSON 响应。
     """
 
-    jd_parsed = state.get("jd_parsed", fallback_jd_parsed)
+    jd_parsed = state.get("jd_parsed")
     payload = {
         "thread_id": thread_id or state.get("thread_id"),
         "jd_parsed": _serialize(jd_parsed),
@@ -274,12 +245,20 @@ def _extract_interrupt(snapshot: Any | None) -> dict[str, Any] | None:
 
 
 def _safe_get_state(graph: Any, config: dict[str, Any]) -> Any | None:
-    """在 Week1 无 Checkpointer 的注入图中保留普通 HTTP 响应兼容性。"""
+    """在无 Checkpointer 的注入图中保留普通 HTTP 响应兼容性。"""
 
     try:
         return graph.get_state(config)
     except ValueError:
         return None
+
+
+def _build_analysis_input(request: JobAnalysisRequest) -> str:
+    """构造供 Supervisor 判断单任务或组合任务的原始用户意图。"""
+
+    if request.resume_version is None:
+        return "请解析以下岗位要求：\n" + request.jd_text
+    return "请先分析以下岗位要求，再匹配指定简历：\n" + request.jd_text
 
 
 app = create_app()

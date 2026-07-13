@@ -157,17 +157,36 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
 
 
 @pytest.mark.core_agent_tests
-def test_compiled_graph_declares_resume_match_low_score_gate_and_finalize_edges() -> None:
+@pytest.mark.parametrize(
+    ("source_node", "expected_target"),
+    [
+        ("jd_parser", END),
+        ("resume_matcher", "low_score_gate"),
+        ("interview_simulator", END),
+        ("clarify_node", END),
+        ("out_of_scope_node", END),
+        ("error_node", END),
+    ],
+)
+def test_compiled_graph_declares_expected_terminal_or_gate_edge(
+    source_node: str,
+    expected_target: str,
+) -> None:
+    """验证原有终点节点及 matcher 新增 Gate 的独立静态边。"""
+
     graph = build_graph(FakeChatModel(['{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}']))
 
     edges = _compiled_graph_edges(graph)
 
-    assert ("jd_parser", END) in edges
-    assert ("resume_matcher", "low_score_gate") in edges
-    assert ("interview_simulator", END) in edges
-    assert ("clarify_node", END) in edges
-    assert ("out_of_scope_node", END) in edges
-    assert ("error_node", END) in edges
+    assert (source_node, expected_target) in edges
+
+
+@pytest.mark.core_agent_tests
+def test_compiled_graph_declares_finalize_end_edge() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}']))
+
+    edges = _compiled_graph_edges(graph)
+
     assert ("finalize_node", END) in edges
 
 

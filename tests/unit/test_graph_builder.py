@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 from langgraph.graph import END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
@@ -161,7 +163,7 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
     ("source_node", "expected_target"),
     [
         ("jd_parser", END),
-        ("resume_matcher", "low_score_gate"),
+        ("resume_matcher", "prepare_low_score_review"),
         ("interview_simulator", END),
         ("clarify_node", END),
         ("out_of_scope_node", END),
@@ -192,23 +194,46 @@ def test_compiled_graph_declares_finalize_end_edge() -> None:
 
 @pytest.mark.core_agent_tests
 def test_low_score_gate_sets_review_status_and_stops_before_finalize() -> None:
-    graph = _build_graph_for_resume_match(59.9)
+    graph = build_graph(
+        FakeChatModel(
+            [
+                '{"route":"resume_match","confidence":0.9,"reason":"match","task_queue":[]}',
+                _build_llm_analysis(0.4),
+            ]
+        ),
+        resume_store=FakeResumeStore(
+            {
+                ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+                ("API design", "2026-07-v1"): [{"chunk_id": "api-1", "quote": "API design 0.4", "relevance": 0.4}],
+                ("3年以上后端开发经验", "2026-07-v1"): [{"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}],
+            }
+        ),
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "low-score-test"}}
 
     result = graph.invoke(
         {
             "user_input": "测试低分 Gate",
             "resume_version": "2026-07-v1",
             "jd_parsed": _build_resume_match_jd(),
-        }
+        },
+        config=config,
     )
 
     assert result["match_result"].total_score == 59.9
     assert result["match_result"].low_score_review_required is True
     assert result["review_status"] == "in_review"
     assert result["review_target"] == "match_result"
-    assert result["current_node"] == "low_score_gate"
+    assert result["current_node"] == "prepare_low_score_review"
+    snapshot = graph.get_state(config)
+    assert snapshot.tasks[0].interrupts[0].value["type"] == "low_match_score"
     assert "finalize_node" not in [event["node"] for event in result["execution_history"]]
     assert result.get("final_output") is None
+
+    resumed = graph.invoke(Command(resume={"action": "continue", "feedback": ""}), config=config)
+    assert resumed["review_status"] == "approved"
+    assert resumed["current_node"] == "finalize_node"
 
 
 @pytest.mark.core_agent_tests

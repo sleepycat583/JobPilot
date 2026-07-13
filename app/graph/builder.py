@@ -11,6 +11,7 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agents.jd_parser import jd_parser_node
 from app.agents.resume_matcher import resume_matcher_node
@@ -21,7 +22,9 @@ from app.graph.control_nodes import (
     finalize_node,
     interview_simulator,
     low_score_gate_node,
+    low_score_cancelled_node,
     out_of_scope_node,
+    prepare_low_score_review_node,
 )
 from app.graph.routing import resolve_route_node
 from app.rag.chroma_store import ChromaResumeStore
@@ -33,6 +36,7 @@ def build_graph(
     chat_model: BaseChatModel,
     search_backend: SearchBackend | None = None,
     resume_store: ChromaResumeStore | Any | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ):
     """构建并编译 Week1 最小图拓扑。
 
@@ -59,6 +63,8 @@ def build_graph(
     graph.add_node("jd_parser", jd_parser_with_dependencies)
     graph.add_node("resume_matcher", resume_matcher_with_dependencies)
     graph.add_node("low_score_gate", low_score_gate_node)
+    graph.add_node("prepare_low_score_review", prepare_low_score_review_node)
+    graph.add_node("low_score_cancelled", low_score_cancelled_node)
     graph.add_node("finalize_node", finalize_node)
     graph.add_node("interview_simulator", interview_simulator)
     graph.add_node("clarify_node", clarify_node)
@@ -81,22 +87,28 @@ def build_graph(
     )
 
     graph.add_edge("jd_parser", END)
-    graph.add_edge("resume_matcher", "low_score_gate")
+    graph.add_conditional_edges(
+        "resume_matcher",
+        _resolve_match_result_route,
+        {"prepare_review": "prepare_low_score_review", "continue": "low_score_gate"},
+    )
+    graph.add_edge("prepare_low_score_review", "low_score_gate")
     graph.add_conditional_edges(
         "low_score_gate",
         _resolve_low_score_gate_route,
         {
-            "await_review": END,
             "continue": "finalize_node",
+            "cancel": "low_score_cancelled",
         },
     )
     graph.add_edge("finalize_node", END)
+    graph.add_edge("low_score_cancelled", END)
     graph.add_edge("interview_simulator", END)
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def resume_matcher_placeholder(_: JobAssistantState) -> dict[str, object]:
@@ -121,10 +133,14 @@ def resume_matcher_placeholder(_: JobAssistantState) -> dict[str, object]:
 def _resolve_low_score_gate_route(state: JobAssistantState) -> str:
     """根据低分标志决定 Gate 后续路径。"""
 
+    return "cancel" if state.get("review_status") == "rejected" else "continue"
+
+
+def _resolve_match_result_route(state: JobAssistantState) -> str:
+    """将低分匹配结果先送入持久化审核准备节点。"""
+
     match_result = state.get("match_result")
-    if bool(getattr(match_result, "low_score_review_required", False)):
-        return "await_review"
-    return "continue"
+    return "prepare_review" if bool(getattr(match_result, "low_score_review_required", False)) else "continue"
 
 
 def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:

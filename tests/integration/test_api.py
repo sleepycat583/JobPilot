@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.api import AppDependencies, create_app
 from app.constants import MAX_INPUT_LENGTH
@@ -97,7 +98,7 @@ def _client_for(
         },
         missing_versions=missing_versions or set(),
     )
-    graph = build_graph(model, resume_store=store)
+    graph = build_graph(model, resume_store=store, checkpointer=MemorySaver())
     return TestClient(create_app(dependencies=AppDependencies(graph=graph)))
 
 
@@ -133,8 +134,35 @@ def test_job_analysis_exposes_low_score_review_status() -> None:
     assert payload["match_result"]["total_score"] == 59.9
     assert payload["review_status"] == "in_review"
     assert payload["review_target"] == "match_result"
-    assert payload["current_node"] == "low_score_gate"
+    assert payload["current_node"] == "prepare_low_score_review"
+    assert payload["status"] == "interrupted"
+    assert payload["interrupt"]["accepted_actions"] == ["continue", "cancel"]
     assert payload["final_output"] is None
+
+
+def test_resume_low_score_review_cancel_ends_without_finalization() -> None:
+    with _client_for(responsibility_relevance=0.4) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "cancel", "feedback": "暂不考虑该岗位"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["review_status"] == "rejected"
+    assert payload["current_node"] == "low_score_cancelled"
+    assert payload["final_output"] is None
+
+
+def test_resume_rejects_unknown_thread() -> None:
+    with _client_for() as client:
+        response = client.post("/v1/threads/not-found/resume", json={"action": "continue"})
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
 
 
 def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:

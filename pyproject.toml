@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Week 1 skeleton for the job-assistant multi-agent system"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "langgraph==0.2.34",
+  "langgraph==0.2.76",
+  "langgraph-checkpoint-sqlite==2.0.11",
   "langchain==0.3.3",
   "langchain-openai==0.2.2",
   "fastapi==0.115.0",

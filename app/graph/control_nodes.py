@@ -118,6 +118,7 @@ def revision_dispatch_node(state: JobAssistantState) -> dict[str, object]:
     return {
         "current_node": "revision_dispatch",
         "review_status": "revising",
+        "match_result": None if state.get("review_target") == "match_result" else state.get("match_result"),
         "execution_history": [_build_event("revision_dispatch", "success", f"revising:{state.get('review_target')}")],
     }
 
@@ -137,7 +138,7 @@ def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
             score=match_result.total_score,
             threshold=60.0,
             top_gaps=match_result.gaps[:5],
-            accepted_actions=["continue", "cancel"],
+            accepted_actions=["continue", "revise_inputs", "cancel"],
         )
         decision = interrupt(payload.model_dump())
         action = decision.get("action") if isinstance(decision, dict) else None
@@ -154,6 +155,8 @@ def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
                 "review_feedback": str(decision.get("feedback", "")),
                 "execution_history": [_build_event("low_score_gate", "resume", "low_score_cancel")],
             }
+        if action == "revise_inputs":
+            return _build_low_score_revision_update(state, decision)
         raise ValueError("Unsupported low score review action")
 
     return {
@@ -228,6 +231,30 @@ def _build_final_review_draft(state: JobAssistantState, target: str) -> dict[str
     if value is None:
         raise ValueError(f"Final review target has no draft: {target}")
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
+
+
+def _build_low_score_revision_update(state: JobAssistantState, decision: dict[str, object]) -> dict[str, object]:
+    """记录低分 revise_inputs 决策并构造确定性的重跑任务队列。
+
+    新 JD 必须先重新解析再评分；仅更换简历版本或补充反馈时复用当前 JD。旧评分
+    不在当前 State 中继续暴露，但保留在前一 checkpoint 的不可变快照中。
+    """
+
+    jd_text = decision.get("jd_text")
+    resume_version = decision.get("resume_version")
+    task_queue = ["jd_parse", "resume_match"] if isinstance(jd_text, str) and jd_text.strip() else ["resume_match"]
+    update: dict[str, object] = {
+        "current_node": "low_score_gate",
+        "review_status": "rejected",
+        "review_feedback": str(decision.get("feedback", "")),
+        "task_queue": task_queue,
+        "execution_history": [_build_event("low_score_gate", "resume", "low_score_revise_inputs")],
+    }
+    if isinstance(jd_text, str) and jd_text.strip():
+        update["user_input"] = jd_text
+    if isinstance(resume_version, str) and resume_version.strip():
+        update["resume_version"] = resume_version
+    return update
 
 
 def _build_error_entry(code: str, node: str, retryable: bool, attempt: int, message: str) -> ErrorEntry:

@@ -15,9 +15,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.rag.chroma_store import ChromaQueryResult, ChromaResumeStore, ResumeVersionNotFoundError
+from app.graph.review_helpers import next_match_business_attempt
 from app.schemas.jd import JDParsed, SkillRequirement
 from app.schemas.resume import EvidenceRef, MatchItem, MatchResult
-from app.schemas.state import ErrorEntry, ExecutionEvent, JobAssistantState
+from app.schemas.state import ErrorEntry, ExecutionEvent, ExecutionEventMetadata, JobAssistantState
 from app.services.match_scoring import (
     ConstraintStatus,
     MatchScoreBreakdown,
@@ -177,7 +178,18 @@ def resume_matcher_node(
         "current_node": current_node,
         "retry_count": {current_node: structured_result.retry_count},
         "error_log": error_log,
-        "execution_history": [_build_event(current_node, "success", execution_detail)],
+        "execution_history": [
+            _build_event(
+                current_node,
+                "success",
+                execution_detail,
+                metadata={
+                    "business_attempt": next_match_business_attempt(state.get("execution_history", [])),
+                    "resume_version": resume_version,
+                    "total_score": match_result.total_score,
+                },
+            )
+        ],
     }
 
 
@@ -398,13 +410,23 @@ def _to_scoreable_item(item: dict[str, Any]) -> ScoreableMatchItem:
     )
 
 
-def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:
-    return {
+def _build_event(
+    node: str,
+    event: str,
+    detail: str,
+    metadata: ExecutionEventMetadata | None = None,
+) -> ExecutionEvent:
+    """构造 matcher 执行轨迹，并在成功评分时附加结构化业务 attempt。"""
+
+    result: ExecutionEvent = {
         "node": node,
         "event": event,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "detail": detail,
     }
+    if metadata is not None:
+        result["metadata"] = metadata
+    return result
 
 
 def _build_error_entry(code: str, message: str, retryable: bool, attempt: int) -> ErrorEntry:

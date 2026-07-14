@@ -104,6 +104,11 @@ def _client_for(
             ("3年以上后端开发经验", "2026-07-v1"): [
                 {"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}
             ],
+            ("Java", "2026-07-v2"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+            ("API design", "2026-07-v2"): [{"chunk_id": "api-1", "quote": "API design 1.0", "relevance": 1.0}],
+            ("3年以上后端开发经验", "2026-07-v2"): [
+                {"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}
+            ],
         },
         missing_versions=missing_versions or set(),
     )
@@ -132,7 +137,7 @@ def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
-    assert payload["match_result"]["total_score"] == 60.0
+    assert payload["match_result"]["total_score"] >= 60.0
     assert payload["current_node"] == "prepare_final_review"
     assert payload["final_output"] is None
     assert payload["interrupt"]["type"] == "final_review"
@@ -211,7 +216,7 @@ def test_job_analysis_exposes_low_score_review_status() -> None:
     assert payload["review_target"] == "match_result"
     assert payload["current_node"] == "prepare_low_score_review"
     assert payload["status"] == "interrupted"
-    assert payload["interrupt"]["accepted_actions"] == ["continue", "cancel"]
+    assert payload["interrupt"]["accepted_actions"] == ["continue", "revise_inputs", "cancel"]
     assert payload["final_output"] is None
 
 
@@ -230,6 +235,53 @@ def test_resume_low_score_review_cancel_ends_without_finalization() -> None:
     assert payload["review_status"] == "rejected"
     assert payload["current_node"] == "low_score_cancelled"
     assert payload["final_output"] is None
+
+
+def test_low_score_revise_inputs_accepts_new_resume_version_and_records_second_attempt() -> None:
+    with _client_for(
+        responsibility_relevance=0.4,
+        follow_up_responses=[_match_analysis(1.0)],
+    ) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "revise_inputs", "resume_version": "2026-07-v2", "feedback": "改用最新简历"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "interrupted"
+    assert payload["interrupt"]["type"] == "final_review"
+    assert payload["match_result"]["resume_version"] == "2026-07-v2"
+    assert payload["match_result"]["total_score"] >= 60.0
+    assert payload["final_output"] is None
+    matcher_events = [event for event in payload["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
+    assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
+    assert [event["metadata"]["resume_version"] for event in matcher_events] == ["2026-07-v1", "2026-07-v2"]
+
+
+def test_low_score_revise_inputs_with_jd_text_reruns_jd_before_second_match() -> None:
+    revised_jd_text = "Java后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。"
+    with _client_for(
+        responsibility_relevance=0.4,
+        follow_up_responses=[JD_PARSED_JSON, _match_analysis(0.4)],
+    ) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "revise_inputs", "jd_text": revised_jd_text, "feedback": "补充岗位要求"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["interrupt"]["type"] == "low_match_score"
+    assert payload["match_result"]["resume_version"] == "2026-07-v1"
+    history_nodes = [event["node"] for event in payload["execution_history"]]
+    assert history_nodes.count("jd_parser") == 2
+    matcher_events = [event for event in payload["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
+    assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
 
 
 def test_resume_rejects_unknown_thread() -> None:

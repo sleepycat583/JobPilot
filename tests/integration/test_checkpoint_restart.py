@@ -75,13 +75,16 @@ from app.graph.checkpoint import open_sqlite_checkpointer
 JD_TEXT = "后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。"
 JD_JSON = '{"job_title":"Java后端工程师","seniority":"mid","company_name":null,"responsibilities":["API design"],"skills":[{"name":"Java","category":"language","priority":"must","evidence":"熟悉 Java"}],"experience_requirements":["3年以上后端开发经验"],"education_requirements":[],"interview_focus":[],"company_context":[],"ambiguities":[],"source_language":"zh-CN"}'
 MATCH_JSON = '{"must_items":[{"requirement":"Java","status":"transferable","rationale":"ok","evidence":[{"chunk_id":"java-1","quote":"Java"}],"recent":true,"quantified":true}],"responsibility_items":[{"requirement":"API design","status":"transferable","rationale":"ok","evidence":[{"chunk_id":"api-1","quote":"API design"}],"recent":true,"quantified":true}],"preferred_items":[],"constraint_items":[{"requirement":"3年以上后端开发经验","status":"satisfied","rationale":"ok","evidence":[{"chunk_id":"exp-1","quote":"3 years"}]}],"strengths":["strong"],"gaps":[],"recommendations":[]}'
+HIGH_MATCH_JSON = MATCH_JSON.replace('"quote":"API design"', '"quote":"API design 1.0"')
 
 @dataclass
 class Model:
     calls: int = 0
+    revise_mode: bool = False
     def invoke(self, prompt: str) -> str:
-        responses = ['{"route":"jd_parse","confidence":0.9,"reason":"combo","task_queue":["jd_parse","resume_match"]}', JD_JSON, MATCH_JSON]
-        value = responses[min(self.calls, len(responses) - 1)]
+        responses = ['{"route":"jd_parse","confidence":0.9,"reason":"combo","task_queue":["jd_parse","resume_match"]}', JD_JSON, MATCH_JSON, HIGH_MATCH_JSON]
+        index = 3 if self.revise_mode else self.calls
+        value = responses[min(index, len(responses) - 1)]
         self.calls += 1
         return value
     def bind(self, **_: Any): return self
@@ -91,11 +94,13 @@ class Store:
     def query(self, text: str, version: str):
         self.calls += 1
         relevance = 0.4 if text == "API design" else 1.0
-        return [{"chunk_id": text, "quote": text, "relevance": relevance}]
+        chunk_id = {"Java": "java-1", "API design": "api-1", "3年以上后端开发经验": "exp-1"}[text]
+        quote = "API design 1.0" if text == "API design" and version == "resume-v2" else text
+        return [{"chunk_id": chunk_id, "quote": quote, "relevance": relevance if version != "resume-v2" else 1.0}]
 
 path, thread_id, phase = sys.argv[1:]
 checkpointer, connection = open_sqlite_checkpointer(path)
-model, store = Model(), Store()
+model, store = Model(revise_mode=phase == "resume_revise"), Store()
 graph = build_graph(model, resume_store=store, checkpointer=checkpointer)
 config = {"configurable": {"thread_id": thread_id}}
 if phase == "interrupt":
@@ -103,8 +108,12 @@ if phase == "interrupt":
     snapshot = graph.get_state(config)
     print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 else:
-    action = "approve" if phase == "resume_approve" else "continue" if phase == "resume_continue" else "cancel"
-    result = graph.invoke(Command(resume={"action": action, "feedback": "confirmed"}), config=config)
+    if phase == "resume_revise":
+        command = {"action": "revise_inputs", "resume_version": "resume-v2", "feedback": "use latest resume"}
+    else:
+        action = "approve" if phase == "resume_approve" else "continue" if phase == "resume_continue" else "cancel"
+        command = {"action": action, "feedback": "confirmed"}
+    result = graph.invoke(Command(resume=command), config=config)
     snapshot = graph.get_state(config)
     interrupt = snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None
     print(json.dumps({"state": result, "interrupt": interrupt, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
@@ -173,6 +182,27 @@ def test_combined_task_low_score_checkpoint_recovers_without_replaying_workers(
         assert approved["state"]["final_output"]["type"] == "match_result"
         assert approved["model_calls"] == 0
         assert approved["store_calls"] == 0
+
+
+@pytest.mark.core_agent_tests
+def test_low_score_revise_inputs_recovers_in_fresh_process_with_second_attempt(tmp_path: Path) -> None:
+    """验证换简历版本的重算复用 thread_id，并留下第二次结构化评分 attempt。"""
+
+    checkpoint_path = tmp_path / "revise-checkpoints.sqlite3"
+    thread_id = "combined-revise"
+    interrupted = _run_combined_child(checkpoint_path, thread_id, "interrupt")
+    assert interrupted["interrupt"]["type"] == "low_match_score"
+
+    revised = _run_combined_child(checkpoint_path, thread_id, "resume_revise")
+    state = revised["state"]
+    assert state["match_result"]["total_score"] == 52.0
+    assert revised["interrupt"]["type"] == "low_match_score"
+    assert state["match_result"]["resume_version"] == "resume-v2"
+    assert revised["model_calls"] == 1
+    assert revised["store_calls"] == 3
+    matcher_events = [event for event in state["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
+    assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
+
 
 
 @pytest.mark.core_agent_tests

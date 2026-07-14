@@ -14,7 +14,7 @@
 
 后续范围或当前占位：
 
-- 模拟面试、rolling summary、结构化日志装饰器、最终产物生成；当前 `finalize_node` 不写 `final_output`。
+- 模拟面试、rolling summary、结构化日志装饰器；最终产物仅在人工最终核可后由 `finalize_node` 格式化，不生成额外 LLM 报告文本。
 - SQLAlchemy 业务存储、SSE、React UI、Docker Compose 与生产交付。
 
 ## 本地运行
@@ -49,9 +49,9 @@ pytest -q
 
 ## 已知限制
 
-- 低分 Gate 当前支持 `interrupt()`、`continue`/`cancel` 和 SQLite checkpoint 恢复；完整 `ReviewStatus` 生命周期与 revise 操作仍未实现。
+- 低分 Gate 当前支持 `interrupt()`、`continue`/`revise_inputs`/`cancel` 和 SQLite checkpoint 恢复；`revise_inputs` 可更换简历版本或修正 JD 后重新评分，若结果仍低分则再次要求确认。
 - `build_graph` 未注入 `resume_store` 时会启用仅供测试的 100 分 matcher 占位，真实匹配必须注入 Chroma store。
 - Chroma 当前只校验 collection metadata 中的 embedding 模型名和维度，未对运行时向量长度做额外校验。
 - 简历切分是规则式文本处理：仅支持有限的中英文标题别名；experience/project 没有显式标签或日期范围时会保守合并，避免误切分。
 - 索引目录入口只读取顶层 UTF-8 `.txt` 文件，不支持 PDF/DOCX、递归目录或其他文本编码。
-- 面试、最终产物、SSE、React、SQLAlchemy 和 Docker 尚未实现，不应作为可用功能对外承诺。
+- 面试、SSE、React、SQLAlchemy 和 Docker 尚未实现，不应作为可用功能对外承诺。

@@ -128,7 +128,7 @@ def build_graph(
     graph.add_conditional_edges(
         "revision_dispatch",
         _resolve_revision_target_route,
-        {"jd_parser": "jd_parser", "resume_matcher": "resume_matcher", "error": "error_node"},
+        {"queue_dispatch": "queue_dispatch", "jd_parser": "jd_parser", "resume_matcher": "resume_matcher", "error": "error_node"},
     )
     graph.add_conditional_edges(
         "resume_matcher",
@@ -142,6 +142,7 @@ def build_graph(
         {
             "continue": "queue_dispatch",
             "cancel": "low_score_cancelled",
+            "revise": "revision_dispatch",
         },
     )
     graph.add_edge("finalize_node", END)
@@ -216,7 +217,9 @@ def _resolve_jd_completion_route(state: JobAssistantState) -> str:
 def _resolve_low_score_gate_route(state: JobAssistantState) -> str:
     """根据低分标志决定 Gate 后续路径。"""
 
-    return "cancel" if state.get("review_status") == "rejected" else "continue"
+    if state.get("review_status") != "rejected":
+        return "continue"
+    return "revise" if state.get("task_queue") else "cancel"
 
 
 def _resolve_match_result_route(state: JobAssistantState) -> str:
@@ -235,6 +238,8 @@ def _resolve_final_review_route(state: JobAssistantState) -> str:
 def _resolve_revision_target_route(state: JobAssistantState) -> str:
     """按审核目标将修订流返回对应 Worker，避免重新执行无关任务。"""
 
+    if state.get("task_queue"):
+        return "queue_dispatch"
     return {"jd_parsed": "jd_parser", "match_result": "resume_matcher"}.get(state.get("review_target"), "error")
 
 

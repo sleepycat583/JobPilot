@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
-from app.schemas.state import ExecutionEvent
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.schemas.state import ExecutionEvent
 
 
-def next_match_business_attempt(execution_history: list[ExecutionEvent]) -> int:
+def next_match_business_attempt(execution_history: list["ExecutionEvent"] | list[dict[str, Any]]) -> int:
     """计算下一次完成简历评分时应使用的业务 attempt 编号。
 
     参数：

@@ -1,11 +1,12 @@
-"""Review 最小冻结契约。
+"""Review 与 HITL 的冻结输入输出契约。
 
-本文件只定义 §5.1 中引用到的 ReviewStatus 枚举，不实现 Week 2 的完整审核流程。
+本模块由 API 恢复端点和确定性控制节点共同使用。所有命令通过 `type` 区分，
+避免不同人工介入点接收彼此无效的字段组合。
 """
 
-from typing import Literal
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ReviewStatus = Literal["pending", "in_review", "approved", "rejected", "revising"]
 
@@ -15,8 +16,19 @@ class LowScoreReviewCommand(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["continue", "cancel"]
+    type: Literal["low_match_score"] = "low_match_score"
+    action: Literal["continue", "revise_inputs", "cancel"]
     feedback: str = Field(default="", max_length=2000)
+    resume_version: str | None = Field(default=None, min_length=1, max_length=200)
+    jd_text: str | None = Field(default=None, min_length=20)
+
+    @model_validator(mode="after")
+    def validate_revise_inputs(self) -> "LowScoreReviewCommand":
+        """确保 revise_inputs 至少携带一项可用于重算的修订信息。"""
+
+        if self.action == "revise_inputs" and not (self.feedback.strip() or self.resume_version or self.jd_text):
+            raise ValueError("revise_inputs requires feedback, resume_version, or jd_text")
+        return self
 
 
 class LowScoreInterruptPayload(BaseModel):
@@ -29,7 +41,80 @@ class LowScoreInterruptPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["low_match_score"]
+    target: Literal["match_result"] = "match_result"
     score: float = Field(ge=0.0, le=100.0)
     threshold: float = Field(ge=0.0, le=100.0)
     top_gaps: list[str] = Field(max_length=5)
-    accepted_actions: list[Literal["continue", "cancel"]] = Field(min_length=1)
+    accepted_actions: list[Literal["continue", "revise_inputs", "cancel"]] = Field(min_length=1)
+
+
+class InterviewAnswerCommand(BaseModel):
+    """校验面试等待节点的恢复命令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["interview_answer"] = "interview_answer"
+    action: Literal["submit_answer", "context_update", "end_interview"]
+    answer: str = Field(default="", max_length=5000)
+    context: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_interview_input(self) -> "InterviewAnswerCommand":
+        """要求提交回答或补充上下文时提供对应内容。"""
+
+        if self.action == "submit_answer" and not self.answer.strip():
+            raise ValueError("submit_answer requires answer")
+        if self.action == "context_update" and not self.context.strip():
+            raise ValueError("context_update requires context")
+        return self
+
+
+class InterviewInterruptPayload(BaseModel):
+    """面试等待回答或补充信息时发送的最小上下文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["interview_answer"]
+    target: Literal["interview_state"] = "interview_state"
+    question_id: str
+    question: str
+    accepted_actions: list[Literal["submit_answer", "context_update", "end_interview"]] = Field(min_length=1)
+
+
+class FinalReviewCommand(BaseModel):
+    """校验最终候选产物核可的恢复命令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["final_review"] = "final_review"
+    action: Literal["approve", "reject"]
+    feedback: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_rejection_feedback(self) -> "FinalReviewCommand":
+        """要求驳回最终草稿时留下可执行反馈。"""
+
+        if self.action == "reject" and not self.feedback.strip():
+            raise ValueError("reject requires feedback")
+        return self
+
+
+class FinalReviewInterruptPayload(BaseModel):
+    """最终核可前发送的结构化草稿。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["final_review"]
+    target: Literal["jd_parsed", "match_result", "interview_report"]
+    draft: dict[str, Any]
+    accepted_actions: list[Literal["approve", "reject"]] = Field(min_length=1)
+
+
+HITLCommand = Annotated[
+    Union[LowScoreReviewCommand, InterviewAnswerCommand, FinalReviewCommand],
+    Field(discriminator="type"),
+]
+HITLInterruptPayload = Annotated[
+    Union[LowScoreInterruptPayload, InterviewInterruptPayload, FinalReviewInterruptPayload],
+    Field(discriminator="type"),
+]

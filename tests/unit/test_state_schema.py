@@ -57,6 +57,19 @@ def test_operator_add_appends_state_lists() -> None:
 
 
 @pytest.mark.core_agent_tests
+def test_execution_event_metadata_is_optional_and_structured() -> None:
+    event: ExecutionEvent = {
+        "node": "resume_matcher",
+        "event": "success",
+        "timestamp": "t1",
+        "detail": "match_completed",
+        "metadata": {"business_attempt": 2, "resume_version": "v2", "total_score": 72.0},
+    }
+
+    assert event["metadata"]["business_attempt"] == 2
+
+
+@pytest.mark.core_agent_tests
 def test_state_can_hold_independent_business_fields() -> None:
     state: JobAssistantState = {
         "jd_parsed": None,

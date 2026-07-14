@@ -6,13 +6,25 @@
 from operator import add
 from typing import Annotated, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from app.schemas.interview import InterviewState
 from app.schemas.jd import JDParsed
 from app.schemas.resume import MatchResult
 from app.schemas.router import RouterDecision
 from app.schemas.review import ReviewStatus
+
+
+class ExecutionEventMetadata(TypedDict, total=False):
+    """执行轨迹的结构化扩展字段。
+
+    业务节点在需要记录可被程序读取的执行上下文时使用本字段；`detail` 仅保留
+    面向人的简短说明，不能被解析后用于业务分支。
+    """
+
+    business_attempt: int
+    resume_version: str
+    total_score: float
 
 
 class ExecutionEvent(TypedDict):
@@ -22,6 +34,7 @@ class ExecutionEvent(TypedDict):
     event: Literal["enter", "success", "error", "interrupt", "resume"]
     timestamp: str
     detail: str
+    metadata: NotRequired[ExecutionEventMetadata]
 
 
 class ErrorEntry(TypedDict):

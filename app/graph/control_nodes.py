@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from langgraph.types import interrupt
 
-from app.schemas.review import LowScoreInterruptPayload
+from app.schemas.review import FinalReviewInterruptPayload, LowScoreInterruptPayload
 from app.schemas.state import ErrorEntry, ExecutionEvent, JobAssistantState
 
 CONTROL_MESSAGES = {
@@ -18,7 +18,8 @@ CONTROL_MESSAGES = {
     "interview_simulator": "模拟面试节点将在 Week2 实现，本阶段仅保留路由占位。",
     "low_score_gate": "匹配结果已进入低分待审核状态，等待人工确认。",
     "low_score_cancelled": "用户已取消低分匹配任务。",
-    "finalize_node": "最终产物占位节点仅用于验证图继续执行，不写入 final_output。",
+    "final_review_gate": "候选产物等待最终人工核可。",
+    "finalize_node": "最终产物已通过人工核可。",
 }
 
 
@@ -66,6 +67,61 @@ def prepare_low_score_review_node(_: JobAssistantState) -> dict[str, object]:
     }
 
 
+def prepare_final_review_node(state: JobAssistantState) -> dict[str, object]:
+    """在最终核可 interrupt 前持久化候选产物的审核状态。"""
+
+    target = state.get("review_target")
+    if target not in {"jd_parsed", "match_result", "interview_report"}:
+        raise ValueError("Final review requires a valid review_target")
+    return {
+        "current_node": "prepare_final_review",
+        "review_status": "in_review",
+        "execution_history": [_build_event("prepare_final_review", "interrupt", f"final_review:{target}")],
+    }
+
+
+def final_review_gate_node(state: JobAssistantState) -> dict[str, object]:
+    """等待人工核可当前候选产物，并记录 approve 或 reject 决策。"""
+
+    target = state.get("review_target")
+    if state.get("review_status") != "in_review" or target is None:
+        raise ValueError("Final review gate requires an in-review target")
+    payload = FinalReviewInterruptPayload(
+        type="final_review",
+        target=target,
+        draft=_build_final_review_draft(state, target),
+        accepted_actions=["approve", "reject"],
+    )
+    decision = interrupt(payload.model_dump(mode="json"))
+    action = decision.get("action") if isinstance(decision, dict) else None
+    if action == "approve":
+        return {
+            "current_node": "final_review_gate",
+            "review_status": "approved",
+            "execution_history": [_build_event("final_review_gate", "resume", "final_review_approved")],
+        }
+    if action == "reject":
+        return {
+            "current_node": "final_review_gate",
+            "review_status": "rejected",
+            "review_feedback": str(decision.get("feedback", "")),
+            "execution_history": [_build_event("final_review_gate", "resume", "final_review_rejected")],
+        }
+    raise ValueError("Unsupported final review action")
+
+
+def revision_dispatch_node(state: JobAssistantState) -> dict[str, object]:
+    """在被拒绝的审核决策已持久化后，将目标转入 revising 状态。"""
+
+    if state.get("review_status") != "rejected":
+        raise ValueError("Revision dispatch requires a rejected review")
+    return {
+        "current_node": "revision_dispatch",
+        "review_status": "revising",
+        "execution_history": [_build_event("revision_dispatch", "success", f"revising:{state.get('review_target')}")],
+    }
+
+
 def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
     """低分确认 Gate。
 
@@ -106,15 +162,20 @@ def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
     }
 
 
-def finalize_node(_: JobAssistantState) -> dict[str, object]:
-    """最终产物占位节点。
+def finalize_node(state: JobAssistantState) -> dict[str, object]:
+    """在最终核可后格式化当前候选产物，不调用 LLM 改写内容。"""
 
-    本节点只用于证明低分 Gate 通过后图还能继续执行，不写入 final_output。
-    """
-
+    target = state.get("review_target")
+    if state.get("review_status") != "approved" or target is None:
+        raise ValueError("Finalize requires an approved review target")
     return {
         "current_node": "finalize_node",
-        "execution_history": [_build_event("finalize_node", "success", "finalization_placeholder")],
+        "final_output": {
+            "type": target,
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "content": _build_final_review_draft(state, target),
+        },
+        "execution_history": [_build_event("finalize_node", "success", f"finalized:{target}")],
     }
 
 
@@ -150,6 +211,23 @@ def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "detail": detail,
     }
+
+
+def _build_final_review_draft(state: JobAssistantState, target: str) -> dict[str, object]:
+    """提取最终核可所需的结构化草稿，避免在控制节点生成新业务内容。"""
+
+    if target == "jd_parsed":
+        value = state.get("jd_parsed")
+    elif target == "match_result":
+        value = state.get("match_result")
+    elif target == "interview_report":
+        interview_state = state.get("interview_state")
+        value = getattr(interview_state, "report", None)
+    else:
+        raise ValueError(f"Unsupported final review target: {target}")
+    if value is None:
+        raise ValueError(f"Final review target has no draft: {target}")
+    return value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
 
 
 def _build_error_entry(code: str, node: str, retryable: bool, attempt: int, message: str) -> ErrorEntry:

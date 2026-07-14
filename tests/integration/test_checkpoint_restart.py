@@ -18,7 +18,7 @@ import sys
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 from app.graph.checkpoint import open_sqlite_checkpointer
-from app.graph.control_nodes import finalize_node, low_score_cancelled_node, low_score_gate_node, prepare_low_score_review_node
+from app.graph.control_nodes import final_review_gate_node, finalize_node, low_score_cancelled_node, low_score_gate_node, prepare_final_review_node, prepare_low_score_review_node
 from app.schemas.resume import MatchResult
 from app.schemas.state import JobAssistantState
 
@@ -27,11 +27,15 @@ checkpointer, connection = open_sqlite_checkpointer(path)
 graph = StateGraph(JobAssistantState)
 graph.add_node("prepare_low_score_review", prepare_low_score_review_node)
 graph.add_node("low_score_gate", low_score_gate_node)
+graph.add_node("prepare_final_review", prepare_final_review_node)
+graph.add_node("final_review_gate", final_review_gate_node)
 graph.add_node("finalize_node", finalize_node)
 graph.add_node("low_score_cancelled", low_score_cancelled_node)
 graph.set_entry_point("prepare_low_score_review")
 graph.add_edge("prepare_low_score_review", "low_score_gate")
-graph.add_conditional_edges("low_score_gate", lambda state: "cancel" if state.get("review_status") == "rejected" else "continue", {"continue": "finalize_node", "cancel": "low_score_cancelled"})
+graph.add_conditional_edges("low_score_gate", lambda state: "cancel" if state.get("review_status") == "rejected" else "continue", {"continue": "prepare_final_review", "cancel": "low_score_cancelled"})
+graph.add_edge("prepare_final_review", "final_review_gate")
+graph.add_conditional_edges("final_review_gate", lambda state: "reject" if state.get("review_status") == "rejected" else "approve", {"approve": "finalize_node", "reject": "low_score_cancelled"})
 graph.add_edge("finalize_node", END)
 graph.add_edge("low_score_cancelled", END)
 compiled = graph.compile(checkpointer=checkpointer)
@@ -41,6 +45,7 @@ if phase == "interrupt":
         "thread_id": thread_id,
         "jd_parsed": {"job_title": "Java", "seniority": "mid", "company_name": None, "responsibilities": ["API"], "skills": [], "experience_requirements": [], "education_requirements": [], "interview_focus": [], "company_context": [], "ambiguities": [], "source_language": "zh-CN"},
         "match_result": MatchResult(total_score=59.9, dimension_scores={"must": 20.0}, matched_items=[], strengths=["Java"], gaps=["Kubernetes"], recommendations=["补齐"], low_score_review_required=True, resume_version="resume-v1"),
+        "review_target": "match_result",
         "error_log": [{"code": "RAG_EMPTY_RESULT", "node": "resume_matcher", "message": "none", "retryable": False, "attempt": 0, "timestamp": "2026-07-13T00:00:00+00:00", "raw_output_excerpt": None}],
         "execution_history": [{"node": "resume_matcher", "event": "success", "timestamp": "2026-07-13T00:00:00+00:00", "detail": "matched"}],
         "retry_count": {"resume_matcher": 1},
@@ -53,7 +58,8 @@ if phase == "interrupt":
 else:
     action = "continue" if phase == "resume_continue" else "cancel"
     result = compiled.invoke(Command(resume={"action": action, "feedback": "用户决定"}), config=config)
-    print(json.dumps(result, default=lambda value: value.model_dump() if hasattr(value, "model_dump") else str(value)))
+    snapshot = compiled.get_state(config)
+    print(json.dumps({"state": result, "interrupt": snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None}, default=lambda value: value.model_dump() if hasattr(value, "model_dump") else str(value)))
 connection.close()
 '''
 
@@ -97,9 +103,11 @@ if phase == "interrupt":
     snapshot = graph.get_state(config)
     print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 else:
-    action = "continue" if phase == "resume_continue" else "cancel"
+    action = "approve" if phase == "resume_approve" else "continue" if phase == "resume_continue" else "cancel"
     result = graph.invoke(Command(resume={"action": action, "feedback": "confirmed"}), config=config)
-    print(json.dumps({"state": result, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+    snapshot = graph.get_state(config)
+    interrupt = snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None
+    print(json.dumps({"state": result, "interrupt": interrupt, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 connection.close()
 '''
 
@@ -133,7 +141,7 @@ def _run_combined_child(checkpoint_path: Path, thread_id: str, phase: str) -> di
 @pytest.mark.core_agent_tests
 @pytest.mark.parametrize(
     ("resume_phase", "expected_status", "expected_node"),
-    [("resume_continue", "approved", "finalize_node"), ("resume_cancel", "rejected", "low_score_cancelled")],
+    [("resume_continue", "in_review", "prepare_final_review"), ("resume_cancel", "rejected", "low_score_cancelled")],
 )
 def test_combined_task_low_score_checkpoint_recovers_without_replaying_workers(
     tmp_path: Path, resume_phase: str, expected_status: str, expected_node: str
@@ -158,13 +166,20 @@ def test_combined_task_low_score_checkpoint_recovers_without_replaying_workers(
     history_nodes = [event["node"] for event in state["execution_history"]]
     assert history_nodes.count("jd_parser") == 1
     assert history_nodes.count("resume_matcher") == 1
+    if resume_phase == "resume_continue":
+        assert resumed["interrupt"]["type"] == "final_review"
+        approved = _run_combined_child(checkpoint_path, thread_id, "resume_approve")
+        assert approved["state"]["current_node"] == "finalize_node"
+        assert approved["state"]["final_output"]["type"] == "match_result"
+        assert approved["model_calls"] == 0
+        assert approved["store_calls"] == 0
 
 
 @pytest.mark.core_agent_tests
 @pytest.mark.parametrize(
     ("resume_phase", "expected_status", "expected_node"),
     [
-        ("resume_continue", "approved", "finalize_node"),
+        ("resume_continue", "in_review", "prepare_final_review"),
         ("resume_cancel", "rejected", "low_score_cancelled"),
     ],
 )
@@ -182,13 +197,16 @@ def test_sqlite_checkpoint_recovers_complete_state_in_fresh_process(
     assert interrupted["interrupt"]["type"] == "low_match_score"
     assert baseline["review_status"] == "in_review"
 
-    resumed = _run_child(checkpoint_path, thread_id, resume_phase)
+    resumed_payload = _run_child(checkpoint_path, thread_id, resume_phase)
+    resumed = resumed_payload["state"]
     assert resumed["review_status"] == expected_status
     assert resumed["current_node"] == expected_node
     for field in ("thread_id", "jd_parsed", "match_result", "error_log", "retry_count", "conversation_summary", "summarized_message_count"):
         assert resumed[field] == baseline[field]
     assert resumed["execution_history"][: len(baseline["execution_history"])] == baseline["execution_history"]
     assert resumed.get("final_output") is None
+    if resume_phase == "resume_continue":
+        assert resumed_payload["interrupt"]["type"] == "final_review"
 
     connection = sqlite3.connect(checkpoint_path)
     try:

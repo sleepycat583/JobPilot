@@ -83,8 +83,14 @@ def _client_for(
     missing_versions: set[str] | None = None,
     jd_response: str = JD_PARSED_JSON,
     task_queue: list[str] | None = None,
+    follow_up_responses: list[str] | None = None,
 ) -> TestClient:
-    model = FakeChatModel([_route("jd_parse", task_queue or ["jd_parse", "resume_match"]), jd_response, _match_analysis(responsibility_relevance)])
+    responses = [_route("jd_parse", task_queue or ["jd_parse", "resume_match"]), jd_response]
+    if task_queue != ["jd_parse"]:
+        responses.append(_match_analysis(responsibility_relevance))
+    model = FakeChatModel(
+        responses + (follow_up_responses or [])
+    )
     store = FakeResumeStore(
         {
             ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
@@ -114,7 +120,9 @@ def test_job_analysis_parses_jd_through_http_boundary() -> None:
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
     assert payload["match_result"] is None
     assert payload["error_log"] == []
-    assert payload["current_node"] == "finalize_node"
+    assert payload["current_node"] == "prepare_final_review"
+    assert payload["status"] == "interrupted"
+    assert payload["interrupt"]["type"] == "final_review"
 
 
 def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
@@ -125,8 +133,44 @@ def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
     payload = response.json()
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
     assert payload["match_result"]["total_score"] == 60.0
-    assert payload["current_node"] == "finalize_node"
+    assert payload["current_node"] == "prepare_final_review"
     assert payload["final_output"] is None
+    assert payload["interrupt"]["type"] == "final_review"
+
+
+def test_final_review_approval_creates_final_output() -> None:
+    with _client_for(task_queue=["jd_parse"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "completed"
+    assert payload["review_status"] == "approved"
+    assert payload["current_node"] == "finalize_node"
+    assert payload["final_output"]["type"] == "jd_parsed"
+
+
+def test_final_review_reject_requires_feedback_and_returns_to_revising() -> None:
+    with _client_for(task_queue=["jd_parse"], follow_up_responses=[JD_PARSED_JSON]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        invalid = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "reject"})
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "reject", "feedback": "请调整报告"},
+        )
+
+    assert invalid.status_code == 422
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["review_status"] == "in_review"
+    assert payload["current_node"] == "prepare_final_review"
+    assert payload["final_output"] is None
+    details = [event["detail"] for event in payload["execution_history"]]
+    assert "final_review_rejected" in details
+    assert "revising:jd_parsed" in details
 
 
 def test_combined_analysis_stops_after_technical_jd_failure() -> None:

@@ -164,7 +164,7 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
     [
         ("jd_parser", "queue_dispatch"),
         ("resume_matcher", "prepare_low_score_review"),
-        ("interview_simulator", "queue_dispatch"),
+        ("interview_simulator", END),
         ("clarify_node", END),
         ("out_of_scope_node", END),
         ("error_node", END),
@@ -232,12 +232,18 @@ def test_low_score_gate_sets_review_status_and_stops_before_finalize() -> None:
     assert result.get("final_output") is None
 
     resumed = graph.invoke(Command(resume={"action": "continue", "feedback": ""}), config=config)
-    assert resumed["review_status"] == "approved"
-    assert resumed["current_node"] == "finalize_node"
+    assert resumed["review_status"] == "in_review"
+    assert resumed["current_node"] == "prepare_final_review"
+    assert graph.get_state(config).tasks[0].interrupts[0].value["type"] == "final_review"
+
+    approved = graph.invoke(Command(resume={"action": "approve"}), config=config)
+    assert approved["review_status"] == "approved"
+    assert approved["current_node"] == "finalize_node"
+    assert approved["final_output"]["type"] == "match_result"
 
 
 @pytest.mark.core_agent_tests
-def test_low_score_gate_allows_finalize_and_keeps_final_output_empty() -> None:
+def test_high_score_match_requires_final_approval_before_output() -> None:
     graph = _build_graph_for_resume_match(60.0)
 
     result = graph.invoke(
@@ -250,8 +256,7 @@ def test_low_score_gate_allows_finalize_and_keeps_final_output_empty() -> None:
 
     assert result["match_result"].total_score == 60.0
     assert result["match_result"].low_score_review_required is False
-    assert result.get("review_status") != "in_review"
-    assert result["current_node"] == "finalize_node"
+    assert result["review_status"] == "in_review"
+    assert result["current_node"] == "prepare_final_review"
     assert any(event["node"] == "low_score_gate" for event in result["execution_history"])
-    assert any(event["node"] == "finalize_node" for event in result["execution_history"])
     assert result.get("final_output") is None

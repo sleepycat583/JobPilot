@@ -24,7 +24,8 @@ from app.graph.checkpoint import open_sqlite_checkpointer
 from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
-from app.schemas.review import LowScoreReviewCommand
+from app.schemas.review import HITLCommand
+from pydantic import TypeAdapter, ValidationError
 
 
 class JobAnalysisRequest(BaseModel):
@@ -139,8 +140,8 @@ def create_app(
         return _state_response(state, thread_id=thread_id, snapshot=_safe_get_state(graph, config))
 
     @app.post("/v1/threads/{thread_id}/resume")
-    def resume_low_score_review(thread_id: str, command: LowScoreReviewCommand) -> JSONResponse:
-        """恢复低分 Gate 的已暂停线程，仅接受 continue 或 cancel 命令。"""
+    def resume_hitl(thread_id: str, command: dict[str, Any]) -> JSONResponse:
+        """恢复当前线程的低分、面试或最终核可 HITL 节点。"""
 
         graph = app.state.dependencies.graph
         config = {"configurable": {"thread_id": thread_id}}
@@ -151,8 +152,11 @@ def create_app(
                 status_code=404,
             )
 
+        validated_command = _validate_hitl_command(command, snapshot)
+        if isinstance(validated_command, ApiError):
+            return _error_response(validated_command, status_code=422)
         try:
-            state = graph.invoke(Command(resume=command.model_dump()), config=config)
+            state = graph.invoke(Command(resume=validated_command.model_dump()), config=config)
         except Exception:
             return _error_response(
                 ApiError(code="GRAPH_EXECUTION_FAILED", message="Interrupted graph resume failed"),
@@ -251,6 +255,23 @@ def _safe_get_state(graph: Any, config: dict[str, Any]) -> Any | None:
         return graph.get_state(config)
     except ValueError:
         return None
+
+
+def _validate_hitl_command(command: dict[str, Any], snapshot: Any) -> HITLCommand | ApiError:
+    """按当前 checkpoint 的 interrupt 类型校验恢复命令，拒绝跨 Gate 动作。"""
+
+    interrupt_payload = _extract_interrupt(snapshot)
+    interrupt_type = interrupt_payload.get("type") if interrupt_payload else None
+    if interrupt_type not in {"low_match_score", "interview_answer", "final_review"}:
+        return ApiError(code="INTERRUPT_PROTOCOL_INVALID", message="Interrupted checkpoint has no supported HITL type")
+    candidate = {**command, "type": command.get("type", interrupt_type)}
+    try:
+        validated = TypeAdapter(HITLCommand).validate_python(candidate)
+    except ValidationError:
+        return ApiError(code="HITL_COMMAND_INVALID", message="Command does not match the interrupted HITL contract")
+    if validated.type != interrupt_type:
+        return ApiError(code="HITL_COMMAND_TYPE_MISMATCH", message="Command type does not match the interrupted HITL node")
+    return validated
 
 
 def _build_analysis_input(request: JobAnalysisRequest) -> str:

@@ -20,12 +20,15 @@ from app.agents.supervisor import supervisor_node
 from app.graph.control_nodes import (
     clarify_node,
     error_node,
+    final_review_gate_node,
     finalize_node,
     interview_simulator,
     low_score_gate_node,
     low_score_cancelled_node,
     out_of_scope_node,
     prepare_low_score_review_node,
+    prepare_final_review_node,
+    revision_dispatch_node,
 )
 from app.graph.routing import resolve_route_node
 from app.rag.chroma_store import ChromaResumeStore
@@ -53,12 +56,21 @@ def build_graph(
         return supervisor_node(state, chat_model)
 
     def jd_parser_with_dependencies(state: JobAssistantState) -> dict[str, object]:
-        return jd_parser_node(state, chat_model, search_backend)
+        return {
+            **jd_parser_node(state, chat_model, search_backend),
+            "review_status": "pending",
+            "review_target": "jd_parsed",
+            "review_feedback": None,
+        }
 
     def resume_matcher_with_dependencies(state: JobAssistantState) -> dict[str, object]:
         if resume_store is None:
-            return resume_matcher_placeholder(state)
-        return resume_matcher_node(state, chat_model, resume_store)
+            update = resume_matcher_placeholder(state)
+        else:
+            update = resume_matcher_node(state, chat_model, resume_store)
+        if update.get("match_result") is None:
+            return update
+        return {**update, "review_status": "pending", "review_target": "match_result", "review_feedback": None}
 
     graph.add_node("supervisor", supervisor_with_model)
     graph.add_node("queue_dispatch", queue_dispatch_node)
@@ -67,6 +79,9 @@ def build_graph(
     graph.add_node("low_score_gate", low_score_gate_node)
     graph.add_node("prepare_low_score_review", prepare_low_score_review_node)
     graph.add_node("low_score_cancelled", low_score_cancelled_node)
+    graph.add_node("prepare_final_review", prepare_final_review_node)
+    graph.add_node("final_review_gate", final_review_gate_node)
+    graph.add_node("revision_dispatch", revision_dispatch_node)
     graph.add_node("finalize_node", finalize_node)
     graph.add_node("interview_simulator", interview_simulator)
     graph.add_node("clarify_node", clarify_node)
@@ -95,7 +110,7 @@ def build_graph(
             "jd_parser": "jd_parser",
             "resume_matcher": "resume_matcher",
             "interview_simulator": "interview_simulator",
-            "finalize": "finalize_node",
+            "finalize": "prepare_final_review",
             "error": "error_node",
         },
     )
@@ -103,6 +118,17 @@ def build_graph(
         "jd_parser",
         _resolve_jd_completion_route,
         {"continue": "queue_dispatch", "error": "error_node"},
+    )
+    graph.add_edge("prepare_final_review", "final_review_gate")
+    graph.add_conditional_edges(
+        "final_review_gate",
+        _resolve_final_review_route,
+        {"approve": "finalize_node", "reject": "revision_dispatch"},
+    )
+    graph.add_conditional_edges(
+        "revision_dispatch",
+        _resolve_revision_target_route,
+        {"jd_parser": "jd_parser", "resume_matcher": "resume_matcher", "error": "error_node"},
     )
     graph.add_conditional_edges(
         "resume_matcher",
@@ -120,7 +146,8 @@ def build_graph(
     )
     graph.add_edge("finalize_node", END)
     graph.add_edge("low_score_cancelled", END)
-    graph.add_edge("interview_simulator", "queue_dispatch")
+    # 面试占位尚未产出 interview_report，不能提前进入最终核可。
+    graph.add_edge("interview_simulator", END)
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
@@ -197,6 +224,18 @@ def _resolve_match_result_route(state: JobAssistantState) -> str:
 
     match_result = state.get("match_result")
     return "prepare_review" if bool(getattr(match_result, "low_score_review_required", False)) else "continue"
+
+
+def _resolve_final_review_route(state: JobAssistantState) -> str:
+    """根据最终核可命令决定格式化产物或进入修订分发。"""
+
+    return "reject" if state.get("review_status") == "rejected" else "approve"
+
+
+def _resolve_revision_target_route(state: JobAssistantState) -> str:
+    """按审核目标将修订流返回对应 Worker，避免重新执行无关任务。"""
+
+    return {"jd_parsed": "jd_parser", "match_result": "resume_matcher"}.get(state.get("review_target"), "error")
 
 
 def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:

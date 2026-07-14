@@ -260,3 +260,54 @@ def test_high_score_match_requires_final_approval_before_output() -> None:
     assert result["current_node"] == "prepare_final_review"
     assert any(event["node"] == "low_score_gate" for event in result["execution_history"])
     assert result.get("final_output") is None
+
+
+@pytest.mark.core_agent_tests
+def test_revise_inputs_checkpoint_history_preserves_full_review_lifecycle() -> None:
+    """验证低分重算在每个审核状态边界留下可审计 checkpoint。"""
+
+    graph = build_graph(
+        FakeChatModel(
+            [
+                '{"route":"resume_match","confidence":0.9,"reason":"match","task_queue":[]}',
+                _build_llm_analysis(0.4),
+                _build_llm_analysis(0.4286),
+            ]
+        ),
+        resume_store=FakeResumeStore(
+            {
+                ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+                ("API design", "2026-07-v1"): [{"chunk_id": "api-1", "quote": "API design 0.4", "relevance": 0.4}],
+                ("3年以上后端开发经验", "2026-07-v1"): [{"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}],
+                ("Java", "2026-07-v2"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+                ("API design", "2026-07-v2"): [{"chunk_id": "api-1", "quote": "API design 0.4286", "relevance": 0.4286}],
+                ("3年以上后端开发经验", "2026-07-v2"): [{"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}],
+            }
+        ),
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "revise-history-test"}}
+    graph.invoke(
+        {
+            "user_input": "测试低分重算审核轨迹",
+            "resume_version": "2026-07-v1",
+            "jd_parsed": _build_resume_match_jd(),
+        },
+        config=config,
+    )
+    graph.invoke(
+        Command(resume={"action": "revise_inputs", "resume_version": "2026-07-v2", "feedback": "使用最新简历"}),
+        config=config,
+    )
+
+    history = list(reversed(list(graph.get_state_history(config))))
+    lifecycle = [
+        (snapshot.values.get("review_status"), snapshot.values.get("match_result"))
+        for snapshot in history
+    ]
+    in_review_positions = [index for index, (status, _) in enumerate(lifecycle) if status == "in_review"]
+    rejected_index = next(index for index, (status, _) in enumerate(lifecycle) if status == "rejected")
+    revising_index = next(index for index, (status, result) in enumerate(lifecycle) if status == "revising" and result is None)
+    pending_index = next(index for index, (status, _) in enumerate(lifecycle) if index > revising_index and status == "pending")
+
+    assert in_review_positions[0] < rejected_index < revising_index < pending_index < in_review_positions[-1]

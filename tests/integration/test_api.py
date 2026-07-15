@@ -292,6 +292,72 @@ def test_resume_rejects_unknown_thread() -> None:
     assert response.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
 
 
+def test_mock_interview_queue_normalization_is_visible_to_api() -> None:
+    with _client_for(task_queue=["mock_interview", "resume_match"]) as client:
+        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "interrupted"
+    assert payload["interrupt"]["type"] == "interview_answer"
+    assert payload["match_result"] is None
+    assert payload["interview_state"]["status"] == "waiting"
+    assert payload["error_log"][0]["code"] == "INTERVIEW_QUEUE_NORMALIZED"
+    event = next(item for item in payload["execution_history"] if item["detail"] == "interview_queue_normalized")
+    assert event["metadata"]["original_task_queue"] == ["mock_interview", "resume_match"]
+    assert event["metadata"]["normalized_task_queue"] == ["mock_interview"]
+
+
+def test_mock_interview_context_update_reinterrupts_same_question() -> None:
+    with _client_for(task_queue=["mock_interview"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "context_update", "context": "项目峰值QPS是1200"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "interrupted"
+    assert payload["interrupt"]["type"] == "interview_answer"
+    assert payload["interview_state"]["status"] == "waiting"
+    assert payload["interview_state"]["user_context_updates"][-1] == "项目峰值QPS是1200"
+
+
+def test_mock_interview_submit_answer_ends_in_evaluating_state() -> None:
+    with _client_for(task_queue=["mock_interview"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "submit_answer", "answer": "我负责过缓存优化项目。"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "completed"
+    assert payload["interview_state"]["status"] == "evaluating"
+    assert payload["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
+
+
+def test_mock_interview_end_marks_completed_without_report() -> None:
+    with _client_for(task_queue=["mock_interview"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"action": "end_interview"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "completed"
+    assert payload["interview_state"]["status"] == "completed"
+    assert payload["interview_state"]["current_question_id"] is None
+    assert payload["interview_state"]["report"] is None
+
+
 def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:
     with _client_for() as client:
         empty_response = client.post("/v1/job-analysis", json={"jd_text": "   "})

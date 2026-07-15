@@ -164,7 +164,7 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
     [
         ("jd_parser", "queue_dispatch"),
         ("resume_matcher", "prepare_low_score_review"),
-        ("interview_simulator", END),
+        ("interview_simulator", "interview_await_answer"),
         ("clarify_node", END),
         ("out_of_scope_node", END),
         ("error_node", END),
@@ -311,3 +311,58 @@ def test_revise_inputs_checkpoint_history_preserves_full_review_lifecycle() -> N
     pending_index = next(index for index, (status, _) in enumerate(lifecycle) if index > revising_index and status == "pending")
 
     assert in_review_positions[0] < rejected_index < revising_index < pending_index < in_review_positions[-1]
+
+
+@pytest.mark.core_agent_tests
+def test_interview_skeleton_waits_for_answer_and_does_not_enter_final_review() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-wait-test"}}
+
+    result = graph.invoke({"user_input": "开始模拟面试"}, config=config)
+
+    assert result["current_node"] == "interview_simulator"
+    interview_state = result["interview_state"]
+    assert interview_state.status == "waiting"
+    assert interview_state.current_question_id == "skeleton-q1"
+    snapshot = graph.get_state(config)
+    assert snapshot.tasks[0].interrupts[0].value["type"] == "interview_answer"
+    assert result.get("final_output") is None
+
+
+@pytest.mark.core_agent_tests
+def test_interview_context_update_reinterrupts_same_question() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-context-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+
+    resumed = graph.invoke(Command(resume={"action": "context_update", "context": "项目峰值QPS为1200"}), config=config)
+
+    assert resumed["interview_state"].status == "waiting"
+    assert resumed["interview_state"].user_context_updates[-1] == "项目峰值QPS为1200"
+    assert graph.get_state(config).tasks[0].interrupts[0].value["question_id"] == "skeleton-q1"
+
+
+@pytest.mark.core_agent_tests
+def test_interview_submit_answer_transitions_to_evaluating_and_ends() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-answer-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+
+    resumed = graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
+
+    assert resumed["interview_state"].status == "evaluating"
+    assert resumed["interview_state"].question_records[0].answer == "我负责过缓存优化项目。"
+    assert resumed["current_node"] == "interview_await_answer"
+
+
+@pytest.mark.core_agent_tests
+def test_interview_end_marks_completed_without_report() -> None:
+    graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-end-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+
+    resumed = graph.invoke(Command(resume={"action": "end_interview"}), config=config)
+
+    assert resumed["interview_state"].status == "completed"
+    assert resumed["interview_state"].current_question_id is None
+    assert resumed["interview_state"].report is None

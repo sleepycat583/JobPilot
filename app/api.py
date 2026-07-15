@@ -201,6 +201,7 @@ def _state_response(
         "thread_id": thread_id or state.get("thread_id"),
         "jd_parsed": _serialize(jd_parsed),
         "match_result": _serialize(state.get("match_result")),
+        "interview_state": _serialize(state.get("interview_state")),
         "review_status": state.get("review_status"),
         "review_target": state.get("review_target"),
         "current_node": state.get("current_node"),

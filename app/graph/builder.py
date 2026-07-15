@@ -22,6 +22,7 @@ from app.graph.control_nodes import (
     error_node,
     final_review_gate_node,
     finalize_node,
+    interview_await_answer_node,
     interview_simulator,
     low_score_gate_node,
     low_score_cancelled_node,
@@ -84,6 +85,7 @@ def build_graph(
     graph.add_node("revision_dispatch", revision_dispatch_node)
     graph.add_node("finalize_node", finalize_node)
     graph.add_node("interview_simulator", interview_simulator)
+    graph.add_node("interview_await_answer", interview_await_answer_node)
     graph.add_node("clarify_node", clarify_node)
     graph.add_node("out_of_scope_node", out_of_scope_node)
     graph.add_node("error_node", error_node)
@@ -147,8 +149,12 @@ def build_graph(
     )
     graph.add_edge("finalize_node", END)
     graph.add_edge("low_score_cancelled", END)
-    # 面试占位尚未产出 interview_report，不能提前进入最终核可。
-    graph.add_edge("interview_simulator", END)
+    graph.add_edge("interview_simulator", "interview_await_answer")
+    graph.add_conditional_edges(
+        "interview_await_answer",
+        _resolve_interview_resume_route,
+        {"wait": "interview_await_answer", "end": END},
+    )
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
@@ -241,6 +247,13 @@ def _resolve_revision_target_route(state: JobAssistantState) -> str:
     if state.get("task_queue"):
         return "queue_dispatch"
     return {"jd_parsed": "jd_parser", "match_result": "resume_matcher"}.get(state.get("review_target"), "error")
+
+
+def _resolve_interview_resume_route(state: JobAssistantState) -> str:
+    """面试骨架只有补充背景时再次等待；提交回答或结束后不进入最终核可。"""
+
+    interview_state = state.get("interview_state")
+    return "wait" if isinstance(interview_state, object) and getattr(interview_state, "status", None) == "waiting" else "end"
 
 
 def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:

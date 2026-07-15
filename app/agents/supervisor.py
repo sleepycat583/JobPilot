@@ -83,6 +83,8 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
         }
 
     decision = result.value
+    execution_history: list[ExecutionEvent] = []
+    error_log = list(result.error_log)
     if decision.confidence < 0.70:
         decision = RouterDecision(
             route="clarify",
@@ -92,13 +94,37 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
         )
     elif decision.route in {"jd_parse", "resume_match", "mock_interview"} and not decision.task_queue:
         decision = decision.model_copy(update={"task_queue": [decision.route]})
+    if "mock_interview" in decision.task_queue and decision.task_queue != ["mock_interview"]:
+        original_task_queue = list(decision.task_queue)
+        decision = decision.model_copy(update={"route": "mock_interview", "task_queue": ["mock_interview"]})
+        execution_history.append(
+            _build_event(
+                "supervisor",
+                "success",
+                "interview_queue_normalized",
+                metadata={
+                    "original_task_queue": original_task_queue,
+                    "normalized_task_queue": ["mock_interview"],
+                },
+            )
+        )
+        error_log.append(
+            _build_error_entry(
+                "INTERVIEW_QUEUE_NORMALIZED",
+                "supervisor",
+                False,
+                0,
+                "Interview HITL skeleton only supports an isolated task; other queued tasks were not executed",
+            )
+        )
 
     return {
         "route_decision": decision,
         "task_queue": decision.task_queue,
         "current_node": "supervisor",
         "retry_count": {"supervisor": result.retry_count},
-        "error_log": result.error_log,
+        "error_log": error_log,
+        "execution_history": execution_history,
     }
 
 
@@ -115,6 +141,25 @@ def _build_supervisor_prompt(user_input: str, state: JobAssistantState) -> str:
         f"Has match: {state.get('match_result') is not None}\n"
         f"Interview active: {state.get('interview_state') is not None}"
     )
+
+
+def _build_event(
+    node: str,
+    event: str,
+    detail: str,
+    metadata: dict[str, object] | None = None,
+) -> ExecutionEvent:
+    """构造 Supervisor 审计事件，队列规范化信息只写入结构化 metadata。"""
+
+    result: ExecutionEvent = {
+        "node": node,
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "detail": detail,
+    }
+    if metadata is not None:
+        result["metadata"] = metadata  # type: ignore[typeddict-item]
+    return result
 
 
 def _build_error_entry(code: str, node: str, retryable: bool, attempt: int, message: str) -> ErrorEntry:

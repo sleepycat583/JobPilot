@@ -14,7 +14,7 @@
 
 后续范围或当前占位：
 
-- 模拟面试、rolling summary、结构化日志装饰器；最终产物仅在人工最终核可后由 `finalize_node` 格式化，不生成额外 LLM 报告文本。
+- 模拟面试当前已具备可恢复的 HITL 骨架：初始化等待问题、补充背景、提交回答、结束会话；完整出题/评价/复盘逻辑仍留在第④步。rolling summary、结构化日志装饰器与更完整的面试流程仍待实现；最终产物仅在人工最终核可后由 `finalize_node` 格式化，不生成额外 LLM 报告文本。
 - SQLAlchemy 业务存储、SSE、React UI、Docker Compose 与生产交付。
 
 ## 本地运行
@@ -54,4 +54,4 @@ pytest -q
 - Chroma 当前只校验 collection metadata 中的 embedding 模型名和维度，未对运行时向量长度做额外校验。
 - 简历切分是规则式文本处理：仅支持有限的中英文标题别名；experience/project 没有显式标签或日期范围时会保守合并，避免误切分。
 - 索引目录入口只读取顶层 UTF-8 `.txt` 文件，不支持 PDF/DOCX、递归目录或其他文本编码。
-- 面试、SSE、React、SQLAlchemy 和 Docker 尚未实现，不应作为可用功能对外承诺。
+- 面试的完整出题/评价/复盘流程、SSE、React、SQLAlchemy 和 Docker 尚未实现，不应作为可用功能对外承诺。

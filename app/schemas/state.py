@@ -25,6 +25,8 @@ class ExecutionEventMetadata(TypedDict, total=False):
     business_attempt: int
     resume_version: str
     total_score: float
+    original_task_queue: list[str]
+    normalized_task_queue: list[str]
 
 
 class ExecutionEvent(TypedDict):

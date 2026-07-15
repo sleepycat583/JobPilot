@@ -120,6 +120,44 @@ else:
 connection.close()
 '''
 
+INTERVIEW_CHILD_PROGRAM = r'''
+import json
+import sys
+from dataclasses import dataclass
+from typing import Any
+from langgraph.types import Command
+from app.graph.builder import build_graph
+from app.graph.checkpoint import open_sqlite_checkpointer
+
+@dataclass
+class Model:
+    calls: int = 0
+    def invoke(self, prompt: str) -> str:
+        value = '{"route":"mock_interview","confidence":0.95,"reason":"interview","task_queue":["mock_interview"]}'
+        self.calls += 1
+        return value
+    def bind(self, **_: Any): return self
+
+path, thread_id, phase = sys.argv[1:]
+checkpointer, connection = open_sqlite_checkpointer(path)
+model = Model()
+graph = build_graph(model, checkpointer=checkpointer)
+config = {"configurable": {"thread_id": thread_id}}
+if phase == "interrupt":
+    graph.invoke({"thread_id": thread_id, "user_input": "开始模拟面试"}, config=config)
+    snapshot = graph.get_state(config)
+    print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+elif phase == "context_update":
+    result = graph.invoke(Command(resume={"action": "context_update", "context": "项目峰值QPS是1200"}), config=config)
+    snapshot = graph.get_state(config)
+    interrupt = snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None
+    print(json.dumps({"state": result, "interrupt": interrupt, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+else:
+    result = graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
+    print(json.dumps({"state": result, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+connection.close()
+'''
+
 
 def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
     """在新解释器中创建或恢复 Graph，证明结果不依赖父进程内存。"""
@@ -139,6 +177,19 @@ def _run_combined_child(checkpoint_path: Path, thread_id: str, phase: str) -> di
 
     completed = subprocess.run(
         [sys.executable, "-c", COMBINED_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return json.loads(completed.stdout)
+
+
+def _run_interview_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
+    """在独立进程执行或恢复面试 HITL 骨架。"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", INTERVIEW_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
         check=True,
         capture_output=True,
         text=True,
@@ -243,3 +294,27 @@ def test_sqlite_checkpoint_recovers_complete_state_in_fresh_process(
         assert connection.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0] > 0
     finally:
         connection.close()
+
+
+@pytest.mark.core_agent_tests
+def test_interview_skeleton_recovers_across_three_processes_without_rerunning_supervisor(tmp_path: Path) -> None:
+    """验证面试骨架的等待、补充背景和提交回答都能按同一 thread_id 恢复。"""
+
+    checkpoint_path = tmp_path / "interview-checkpoints.sqlite3"
+    thread_id = "interview-restart-proof"
+
+    interrupted = _run_interview_child(checkpoint_path, thread_id, "interrupt")
+    assert interrupted["interrupt"]["type"] == "interview_answer"
+    assert interrupted["state"]["interview_state"]["status"] == "waiting"
+    assert interrupted["model_calls"] == 1
+
+    updated = _run_interview_child(checkpoint_path, thread_id, "context_update")
+    assert updated["interrupt"]["type"] == "interview_answer"
+    assert updated["state"]["interview_state"]["status"] == "waiting"
+    assert updated["state"]["interview_state"]["user_context_updates"][-1] == "项目峰值QPS是1200"
+    assert updated["model_calls"] == 0
+
+    answered = _run_interview_child(checkpoint_path, thread_id, "submit_answer")
+    assert answered["state"]["interview_state"]["status"] == "evaluating"
+    assert answered["state"]["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
+    assert answered["model_calls"] == 0

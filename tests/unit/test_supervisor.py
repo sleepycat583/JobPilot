@@ -47,6 +47,23 @@ def test_supervisor_preserves_combined_task_order() -> None:
 
 
 @pytest.mark.core_agent_tests
+def test_supervisor_normalizes_mixed_interview_queue_with_structured_audit() -> None:
+    model = FakeChatModel(
+        '{"route":"mock_interview","confidence":0.95,"reason":"Interview plus match requested","task_queue":["mock_interview","resume_match"]}'
+    )
+
+    result = supervisor_node({"user_input": "先开始面试再帮我匹配简历"}, model)
+
+    decision: RouterDecision = result["route_decision"]
+    assert decision.route == "mock_interview"
+    assert result["task_queue"] == ["mock_interview"]
+    assert result["execution_history"][0]["detail"] == "interview_queue_normalized"
+    assert result["execution_history"][0]["metadata"]["original_task_queue"] == ["mock_interview", "resume_match"]
+    assert result["execution_history"][0]["metadata"]["normalized_task_queue"] == ["mock_interview"]
+    assert result["error_log"][0]["code"] == "INTERVIEW_QUEUE_NORMALIZED"
+
+
+@pytest.mark.core_agent_tests
 def test_supervisor_out_of_scope_does_not_call_any_worker() -> None:
     model = FakeChatModel('{"route":"out_of_scope","confidence":0.92,"reason":"Poem request","task_queue":[]}')
 

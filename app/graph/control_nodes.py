@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 
 from langgraph.types import interrupt
 
-from app.schemas.review import FinalReviewInterruptPayload, LowScoreInterruptPayload
+from app.schemas.interview import InterviewState, QuestionRecord
+from app.schemas.review import FinalReviewInterruptPayload, InterviewInterruptPayload, LowScoreInterruptPayload
 from app.schemas.state import ErrorEntry, ExecutionEvent, JobAssistantState
 
 CONTROL_MESSAGES = {
     "clarify_node": "请补充你希望执行的求职任务，例如分析 JD、匹配简历或开始模拟面试。",
     "out_of_scope_node": "当前请求不属于求职辅助系统支持的范围，请改为 JD 解析、简历匹配或模拟面试相关请求。",
-    "interview_simulator": "模拟面试节点将在 Week2 实现，本阶段仅保留路由占位。",
+    "interview_simulator": "模拟面试等待回答或补充信息。",
     "low_score_gate": "匹配结果已进入低分待审核状态，等待人工确认。",
     "low_score_cancelled": "用户已取消低分匹配任务。",
     "final_review_gate": "候选产物等待最终人工核可。",
@@ -48,12 +49,79 @@ def out_of_scope_node(_: JobAssistantState) -> dict[str, object]:
 
 
 def interview_simulator(_: JobAssistantState) -> dict[str, object]:
-    """Week1 的面试占位节点，不实现面试逻辑。"""
+    """初始化单题面试 HITL 骨架，不生成题目评价或复盘报告。"""
 
     return {
         "current_node": "interview_simulator",
-        "execution_history": [_build_event("interview_simulator", "success", "week2_placeholder")],
+        "interview_state": InterviewState(
+            status="waiting",
+            target_question_count=1,
+            current_question_id="skeleton-q1",
+            question_records=[
+                QuestionRecord(
+                    question_id="skeleton-q1",
+                    topic="interview_skeleton",
+                    question="请简要介绍一个最能体现你能力的项目。",
+                    answer="",
+                    follow_up_of=None,
+                    scores={},
+                    feedback="",
+                    strengths=[],
+                    issues=[],
+                )
+            ],
+            user_context_updates=[],
+            report=None,
+        ),
+        "execution_history": [_build_event("interview_simulator", "success", "interview_waiting_initialized")],
     }
+
+
+def interview_await_answer_node(state: JobAssistantState) -> dict[str, object]:
+    """等待面试回答、补充背景或结束命令，并持久化对应的 InterviewState 变化。"""
+
+    interview_state = state.get("interview_state")
+    if not isinstance(interview_state, InterviewState) or interview_state.status != "waiting" or not interview_state.current_question_id:
+        raise ValueError("Interview await node requires a waiting InterviewState")
+    current_record = next(record for record in interview_state.question_records if record.question_id == interview_state.current_question_id)
+    payload = InterviewInterruptPayload(
+        type="interview_answer",
+        question_id=current_record.question_id,
+        question=current_record.question,
+        accepted_actions=["submit_answer", "context_update", "end_interview"],
+    )
+    decision = interrupt(payload.model_dump(mode="json"))
+    action = decision.get("action") if isinstance(decision, dict) else None
+    if action == "submit_answer":
+        updated_records = [
+            record.model_copy(update={"answer": str(decision.get("answer", ""))}) if record.question_id == current_record.question_id else record
+            for record in interview_state.question_records
+        ]
+        return {
+            "current_node": "interview_await_answer",
+            "interview_state": interview_state.model_copy(update={"status": "evaluating", "question_records": updated_records}),
+            "execution_history": [_build_event("interview_await_answer", "resume", "interview_answer_submitted")],
+        }
+    if action == "context_update":
+        answer = str(decision.get("answer", ""))
+        updated_records = [
+            record.model_copy(update={"answer": answer}) if answer and record.question_id == current_record.question_id else record
+            for record in interview_state.question_records
+        ]
+        return {
+            "current_node": "interview_await_answer",
+            "interview_state": interview_state.model_copy(
+                update={"question_records": updated_records, "user_context_updates": [*interview_state.user_context_updates, str(decision.get("context", ""))]}
+            ),
+            "execution_history": [_build_event("interview_await_answer", "resume", "interview_context_updated")],
+        }
+    if action == "end_interview":
+        return {
+            "current_node": "interview_await_answer",
+            "interview_state": interview_state.model_copy(update={"status": "completed", "current_question_id": None}),
+            "execution_history": [_build_event("interview_await_answer", "resume", "interview_ended")],
+        }
+    raise ValueError("Unsupported interview action")
 
 
 def prepare_low_score_review_node(_: JobAssistantState) -> dict[str, object]:

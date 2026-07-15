@@ -360,7 +360,7 @@ def test_mock_interview_submit_answer_evaluates_and_waits_for_next_question() ->
     assert payload["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
 
 
-def test_mock_interview_end_generates_report_without_final_review() -> None:
+def test_mock_interview_end_generates_report_and_enters_final_review() -> None:
     with _client_for(task_queue=["mock_interview"]) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
         thread_id = interrupted.json()["thread_id"]
@@ -371,10 +371,50 @@ def test_mock_interview_end_generates_report_without_final_review() -> None:
 
     payload = response.json()
     assert response.status_code == 200
-    assert payload["status"] == "completed"
+    assert payload["status"] == "interrupted"
     assert payload["interview_state"]["status"] == "completed"
     assert payload["interview_state"]["current_question_id"] is None
     assert payload["interview_state"]["report"] is not None
+    assert payload["review_status"] == "in_review"
+    assert payload["review_target"] == "interview_report"
+    assert payload["interrupt"]["type"] == "final_review"
+    assert payload["final_output"] is None
+
+
+def test_mock_interview_report_approval_finalizes_only_report_and_second_approve_is_not_found() -> None:
+    with _client_for(task_queue=["mock_interview"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "end_interview"})
+        approved = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        repeated = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert review.json()["final_output"] is None
+    payload = approved.json()
+    assert approved.status_code == 200
+    assert payload["status"] == "completed"
+    assert payload["final_output"]["type"] == "interview_report"
+    assert payload["final_output"]["content"] == payload["interview_state"]["report"]
+    assert "question_records" not in payload["final_output"]["content"]
+    assert repeated.status_code == 404
+    assert repeated.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
+
+
+def test_mock_interview_report_reject_preserves_answer_records_and_reinterrupts() -> None:
+    with _client_for(task_queue=["mock_interview"]) as client:
+        interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = interrupted.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"action": "submit_answer", "answer": "我负责过缓存优化项目。"})
+        review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "end_interview"})
+        records_before = review.json()["interview_state"]["question_records"]
+        revised = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "reject", "feedback": "请补充行动建议"})
+
+    payload = revised.json()
+    assert revised.status_code == 200
+    assert payload["status"] == "interrupted"
+    assert payload["review_status"] == "in_review"
+    assert payload["interrupt"]["type"] == "final_review"
+    assert payload["interview_state"]["question_records"] == records_before
     assert payload["final_output"] is None
 
 

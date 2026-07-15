@@ -11,7 +11,7 @@ from langgraph.types import Command
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
 from app.graph.builder import _resolve_interview_decision_route
-from app.agents.interview_simulator import interview_decision_node
+from app.agents.interview_simulator import _assert_question_records_unchanged, interview_decision_node
 from app.schemas.interview import InterviewState, InterviewTopicPlan, QuestionRecord
 from app.schemas.jd import JDParsed, SkillRequirement
 
@@ -376,7 +376,7 @@ def test_interview_submit_answer_evaluates_and_waits_for_next_question() -> None
 
 
 @pytest.mark.core_agent_tests
-def test_interview_end_generates_report_without_final_review_in_this_commit() -> None:
+def test_interview_end_generates_report_and_enters_final_review() -> None:
     graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "interview-end-test"}}
     graph.invoke({"user_input": "开始模拟面试"}, config=config)
@@ -386,8 +386,56 @@ def test_interview_end_generates_report_without_final_review_in_this_commit() ->
     assert resumed["interview_state"].status == "completed"
     assert resumed["interview_state"].current_question_id is None
     assert resumed["interview_state"].report is not None
-    assert resumed.get("final_output") is None
-    assert resumed.get("review_target") is None
+    assert resumed["review_status"] == "in_review"
+    assert resumed["review_target"] == "interview_report"
+    assert resumed["final_output"] is None
+    assert graph.get_state(config).tasks[0].interrupts[0].value["type"] == "final_review"
+
+
+@pytest.mark.core_agent_tests
+def test_interview_report_reject_regenerates_only_report_and_preserves_question_records() -> None:
+    """驳回复盘不得回到出题或评价节点，逐题事实必须逐字保持不变。"""
+
+    graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-report-reject-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+    graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
+    review = graph.invoke(Command(resume={"action": "end_interview"}), config=config)
+    records_before = [record.model_dump(mode="json") for record in review["interview_state"].question_records]
+
+    revised = graph.invoke(Command(resume={"action": "reject", "feedback": "请重写复习建议"}), config=config)
+
+    assert revised["review_status"] == "in_review"
+    assert revised["review_target"] == "interview_report"
+    assert [record.model_dump(mode="json") for record in revised["interview_state"].question_records] == records_before
+    history_nodes = [event["node"] for event in revised["execution_history"]]
+    dispatch_index = history_nodes.index("revision_dispatch")
+    assert set(history_nodes[dispatch_index + 1:]).issubset({"prepare_final_review", "final_review_gate"})
+    assert not {"supervisor", "queue_dispatch", "interview_simulator", "ask_question", "interview_await_answer", "evaluate_answer", "interview_decision"} & set(history_nodes[dispatch_index + 1:])
+    assert graph.get_state(config).tasks[0].interrupts[0].value["type"] == "final_review"
+
+    lifecycle = [snapshot.values.get("review_status") for snapshot in reversed(list(graph.get_state_history(config)))]
+    rejected_index = lifecycle.index("rejected")
+    revising_index = lifecycle.index("revising")
+    pending_index = lifecycle.index("pending", revising_index)
+    assert rejected_index < revising_index < pending_index < len(lifecycle) - 1
+    assert lifecycle[-1] == "in_review"
+
+
+def test_report_record_invariant_rejects_modified_question_records() -> None:
+    """运行时不变量防止未来报告节点实现越权改写逐题事实。"""
+
+    original = QuestionRecord(
+        question_id="q-1", topic="基础", question="问题", answer="回答", follow_up_of=None,
+        scores={"technical_accuracy": 70.0, "structure": 70.0, "job_relevance": 70.0, "evidence": 70.0},
+        feedback="ok", strengths=[], issues=[], answer_relevance="on_topic",
+    )
+    changed = original.model_copy(update={"answer": "被改写"})
+    with pytest.raises(ValueError, match="must not modify"):
+        _assert_question_records_unchanged([original.model_dump(mode="json")], InterviewState(
+            status="completed", target_question_count=1, current_question_id=None,
+            question_records=[changed], user_context_updates=[], report=None, plan=[],
+        ))
 
 
 @pytest.mark.core_agent_tests

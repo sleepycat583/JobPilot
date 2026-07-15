@@ -1,7 +1,8 @@
-"""模拟面试 Worker 的可独立测试业务函数。
+"""模拟面试 Worker 的可独立测试业务函数与 Graph 节点。
 
 本模块由后续 Graph 节点调用：它复用结构化输出重试服务生成计划、题目、评价和复盘叙述，
-并把所有可验证事实交给 Schema 门卫和 interview_scoring 服务处理。本提交不注册 Graph 节点。
+并把所有可验证事实交给 Schema 门卫和 interview_scoring 服务处理。Graph builder 调用本模块的
+节点适配函数，最终审核由 graph.control_nodes 的通用 Review Gate 负责。
 """
 
 from __future__ import annotations
@@ -79,15 +80,34 @@ def interview_decision_node(state: dict[str, object]) -> dict[str, object]:
 
 
 def generate_review_report_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
-    """Graph 节点：生成 report，但本提交不进入最终核可 Gate。"""
+    """Graph 节点：只重建复盘报告，并把草稿送入通用最终核可 Gate。
+
+    参数：
+        state: 含已完成逐题事实的全局 State。
+        chat_model: 仅用于生成报告叙述的模型。
+    返回：
+        新报告、待审核状态及结构化调用轨迹；逐题记录不得被本节点改变。
+    """
 
     interview_state = _require_state(state)
+    records_before = _question_records_snapshot(interview_state)
     reason = state.get("interview_completion_reason", "user_ended")
     result = generate_review_report(chat_model, interview_state, completion_reason=reason, jd_parsed=state.get("jd_parsed") if isinstance(state.get("jd_parsed"), JDParsed) else None)
     if result.value is None:
         raise ValueError("review report generation degraded after structured-output retries")
     completed = interview_state.model_copy(update={"status": "completed", "current_question_id": None, "report": result.value})
-    return {"current_node": "generate_review_report", "interview_state": completed, "retry_count": {"generate_review_report": result.retry_count}, "error_log": result.error_log}
+    # 复盘修订只能替换汇总报告；逐题事实是评分审计依据，绝不能被报告节点覆盖。
+    _assert_question_records_unchanged(records_before, completed)
+    return {
+        "current_node": "generate_review_report",
+        "interview_state": completed,
+        "review_status": "pending",
+        "review_target": "interview_report",
+        "review_feedback": None,
+        "final_output": None,
+        "retry_count": {"generate_review_report": result.retry_count},
+        "error_log": result.error_log,
+    }
 
 
 def build_interview_plan(
@@ -289,6 +309,19 @@ def _require_state(state: dict[str, object]) -> InterviewState:
     if not isinstance(interview_state, InterviewState):
         raise ValueError("interview node requires InterviewState")
     return interview_state
+
+
+def _question_records_snapshot(interview_state: InterviewState) -> list[dict[str, object]]:
+    """生成逐题事实的 JSON 兼容快照，供复盘节点校验其不可变性。"""
+
+    return [record.model_dump(mode="json") for record in interview_state.question_records]
+
+
+def _assert_question_records_unchanged(records_before: list[dict[str, object]], updated_state: InterviewState) -> None:
+    """拒绝报告节点修改题目、回答或逐题评价，防止修订越过职责边界。"""
+
+    if records_before != _question_records_snapshot(updated_state):
+        raise ValueError("Report generation must not modify interview question_records")
 
 
 def _validate_plan_sources(plan: list[InterviewTopicPlan], has_jd: bool, has_match_result: bool) -> None:

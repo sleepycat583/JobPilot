@@ -165,8 +165,16 @@ elif phase == "context_update":
     interrupt = snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None
     print(json.dumps({"state": result, "interrupt": interrupt, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 else:
-    result = graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
-    print(json.dumps({"state": result, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
+    command = {
+        "submit_answer": {"action": "submit_answer", "answer": "我负责过缓存优化项目。"},
+        "end_interview": {"action": "end_interview"},
+        "reject_report": {"action": "reject", "feedback": "rewrite actions"},
+        "approve_report": {"action": "approve"},
+    }[phase]
+    result = graph.invoke(Command(resume=command), config=config)
+    snapshot = graph.get_state(config)
+    interrupt = snapshot.tasks[0].interrupts[0].value if snapshot.tasks and snapshot.tasks[0].interrupts else None
+    print(json.dumps({"state": result, "interrupt": interrupt, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 connection.close()
 '''
 
@@ -265,6 +273,37 @@ def test_low_score_revise_inputs_recovers_in_fresh_process_with_second_attempt(t
     assert revised["store_calls"] == 3
     matcher_events = [event for event in state["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
     assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
+
+
+@pytest.mark.core_agent_tests
+def test_interview_report_final_review_recovers_and_reject_only_rebuilds_report_in_fresh_process(tmp_path: Path) -> None:
+    """SQLite 恢复面试最终审核；驳回不能重放已完成的出题与评分节点。"""
+
+    checkpoint_path = tmp_path / "interview-report-checkpoints.sqlite3"
+    thread_id = "interview-report-review"
+    started = _run_interview_child(checkpoint_path, thread_id, "interrupt")
+    answered = _run_interview_child(checkpoint_path, thread_id, "submit_answer")
+    review = _run_interview_child(checkpoint_path, thread_id, "end_interview")
+    records_before = review["state"]["interview_state"]["question_records"]
+
+    assert started["interrupt"]["type"] == "interview_answer"
+    assert answered["interrupt"]["type"] == "interview_answer"
+    assert review["interrupt"]["type"] == "final_review"
+    assert review["state"]["review_target"] == "interview_report"
+
+    rejected = _run_interview_child(checkpoint_path, thread_id, "reject_report")
+    state = rejected["state"]
+    assert rejected["interrupt"]["type"] == "final_review"
+    assert state["review_status"] == "in_review"
+    assert state["interview_state"]["question_records"] == records_before
+    history_nodes = [event["node"] for event in state["execution_history"]]
+    dispatch_index = history_nodes.index("revision_dispatch")
+    assert set(history_nodes[dispatch_index + 1:]).issubset({"prepare_final_review", "final_review_gate"})
+    assert not {"supervisor", "queue_dispatch", "interview_simulator", "ask_question", "interview_await_answer", "evaluate_answer", "interview_decision"} & set(history_nodes[dispatch_index + 1:])
+
+    approved = _run_interview_child(checkpoint_path, thread_id, "approve_report")
+    assert approved["interrupt"] is None
+    assert approved["state"]["final_output"]["type"] == "interview_report"
 
 
 

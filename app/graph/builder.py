@@ -152,7 +152,13 @@ def build_graph(
     graph.add_conditional_edges(
         "revision_dispatch",
         _resolve_revision_target_route,
-        {"queue_dispatch": "queue_dispatch", "jd_parser": "jd_parser", "resume_matcher": "resume_matcher", "error": "error_node"},
+        {
+            "queue_dispatch": "queue_dispatch",
+            "jd_parser": "jd_parser",
+            "resume_matcher": "resume_matcher",
+            "generate_review_report": "generate_review_report",
+            "error": "error_node",
+        },
     )
     graph.add_conditional_edges(
         "resume_matcher",
@@ -184,7 +190,7 @@ def build_graph(
         _resolve_interview_decision_route,
         {"ask": "ask_question", "report": "generate_review_report"},
     )
-    graph.add_edge("generate_review_report", END)
+    graph.add_edge("generate_review_report", "prepare_final_review")
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
@@ -274,6 +280,9 @@ def _resolve_final_review_route(state: JobAssistantState) -> str:
 def _resolve_revision_target_route(state: JobAssistantState) -> str:
     """按审核目标将修订流返回对应 Worker，避免重新执行无关任务。"""
 
+    # 面试复盘修订只允许重建报告；不能因未来队列策略变动而重新消费业务任务。
+    if state.get("review_target") == "interview_report":
+        return "generate_review_report"
     if state.get("task_queue"):
         return "queue_dispatch"
     return {"jd_parsed": "jd_parser", "match_result": "resume_matcher"}.get(state.get("review_target"), "error")

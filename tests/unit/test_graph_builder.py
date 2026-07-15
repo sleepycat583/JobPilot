@@ -180,8 +180,8 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
 @pytest.mark.parametrize(
     ("source_node", "expected_target"),
     [
-        ("jd_parser", "queue_dispatch"),
-        ("resume_matcher", "prepare_low_score_review"),
+        ("jd_parser", "prepare_final_review"),
+        ("resume_matcher", "prepare_final_review"),
         ("interview_simulator", "ask_question"),
         ("clarify_node", END),
         ("out_of_scope_node", END),
@@ -202,11 +202,12 @@ def test_compiled_graph_declares_expected_terminal_or_gate_edge(
 
 
 @pytest.mark.core_agent_tests
-def test_compiled_graph_declares_finalize_end_edge() -> None:
+def test_compiled_graph_declares_finalize_queue_or_end_edges() -> None:
     graph = build_graph(FakeChatModel(['{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}']))
 
     edges = _compiled_graph_edges(graph)
 
+    assert ("finalize_node", "queue_dispatch") in edges
     assert ("finalize_node", END) in edges
 
 
@@ -276,7 +277,7 @@ def test_high_score_match_requires_final_approval_before_output() -> None:
     assert result["match_result"].low_score_review_required is False
     assert result["review_status"] == "in_review"
     assert result["current_node"] == "prepare_final_review"
-    assert any(event["node"] == "low_score_gate" for event in result["execution_history"])
+    assert not any(event["node"] == "low_score_gate" for event in result["execution_history"])
     assert result.get("final_output") is None
 
 

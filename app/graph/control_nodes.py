@@ -237,19 +237,31 @@ def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
 
 
 def finalize_node(state: JobAssistantState) -> dict[str, object]:
-    """在最终核可后格式化当前候选产物，不调用 LLM 改写内容。"""
+    """在最终核可后格式化末项产物，或让组合队列继续执行。
+
+    参数：
+        state: 已获批的候选产物及剩余任务队列。
+    返回：
+        队列为空时写入最终交付；仍有任务时清空临时交付并交回调度节点。
+    """
 
     target = state.get("review_target")
     if state.get("review_status") != "approved" or target is None:
         raise ValueError("Finalize requires an approved review target")
-    return {
+    update: dict[str, object] = {
         "current_node": "finalize_node",
+        "execution_history": [_build_event("finalize_node", "success", f"finalized:{target}")],
+    }
+    # 业务规则: 组合队列未耗尽时，当前获批草稿不是系统最终交付，不能提前暴露 final_output。
+    if state.get("task_queue"):
+        return {**update, "final_output": None}
+    return {
+        **update,
         "final_output": {
             "type": target,
             "approved_at": datetime.now(timezone.utc).isoformat(),
             "content": _build_final_review_draft(state, target),
         },
-        "execution_history": [_build_event("finalize_node", "success", f"finalized:{target}")],
     }
 
 

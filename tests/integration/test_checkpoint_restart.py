@@ -105,6 +105,8 @@ graph = build_graph(model, resume_store=store, checkpointer=checkpointer)
 config = {"configurable": {"thread_id": thread_id}}
 if phase == "interrupt":
     graph.invoke({"thread_id": thread_id, "user_input": JD_TEXT, "resume_version": "resume-v1"}, config=config)
+    # 该夹具的起点是低分 Gate；先在同一进程核可前置 JD，避免把旧测试误当作队列顺序验收。
+    graph.invoke(Command(resume={"action": "approve"}), config=config)
     snapshot = graph.get_state(config)
     print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 else:
@@ -133,7 +135,9 @@ from app.graph.checkpoint import open_sqlite_checkpointer
 class Model:
     calls: int = 0
     def invoke(self, prompt: str) -> str:
-        if "InterviewPlanOutput" in prompt:
+        if "You are a JD parser" in prompt:
+            value = '{"job_title":"Backend Engineer","seniority":"mid","company_name":null,"responsibilities":["API design"],"skills":[],"experience_requirements":[],"education_requirements":[],"interview_focus":[],"company_context":[],"ambiguities":[],"source_language":"en"}'
+        elif "InterviewPlanOutput" in prompt:
             value = '{"plan":[{"topic_id":"project","topic":"project","objective":"assess contribution","priority":"core","basis":"user_goal"},{"topic_id":"foundation","topic":"foundation","objective":"assess fundamentals","priority":"core","basis":"user_goal"}]}'
         elif "QuestionProposal" in prompt:
             if "'question_id': 'q-1'" in prompt:
@@ -145,7 +149,8 @@ class Model:
         elif "InterviewReportNarrative" in prompt:
             value = '{"performance_summary":"limited sample","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'
         else:
-            value = '{"route":"mock_interview","confidence":0.95,"reason":"interview","task_queue":["mock_interview"]}'
+            queue = '["mock_interview","jd_parse"]' if phase == "interrupt_queue" else '["mock_interview"]'
+            value = '{"route":"mock_interview","confidence":0.95,"reason":"interview","task_queue":' + queue + '}'
         self.calls += 1
         return value
     def bind(self, **_: Any): return self
@@ -155,8 +160,8 @@ checkpointer, connection = open_sqlite_checkpointer(path)
 model = Model()
 graph = build_graph(model, checkpointer=checkpointer)
 config = {"configurable": {"thread_id": thread_id}}
-if phase == "interrupt":
-    graph.invoke({"thread_id": thread_id, "user_input": "开始模拟面试"}, config=config)
+if phase in {"interrupt", "interrupt_queue"}:
+    graph.invoke({"thread_id": thread_id, "user_input": "Start an interview, then analyze this backend engineer role with API responsibilities."}, config=config)
     snapshot = graph.get_state(config)
     print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 elif phase == "context_update":
@@ -188,6 +193,7 @@ def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, o
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
     )
     return json.loads(completed.stdout)
 
@@ -214,6 +220,7 @@ def _run_interview_child(checkpoint_path: Path, thread_id: str, phase: str) -> d
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
     )
     return json.loads(completed.stdout)
 
@@ -304,6 +311,24 @@ def test_interview_report_final_review_recovers_and_reject_only_rebuilds_report_
     approved = _run_interview_child(checkpoint_path, thread_id, "approve_report")
     assert approved["interrupt"] is None
     assert approved["state"]["final_output"]["type"] == "interview_report"
+
+
+@pytest.mark.core_agent_tests
+def test_interview_final_review_restart_preserves_remaining_task_queue(tmp_path: Path) -> None:
+    """面试审核中断跨进程恢复后，后续 JD 只能在 approve 后才开始。"""
+
+    checkpoint_path = tmp_path / "interview-queue-checkpoints.sqlite3"
+    thread_id = "interview-queue-restart"
+    started = _run_interview_child(checkpoint_path, thread_id, "interrupt_queue")
+    review = _run_interview_child(checkpoint_path, thread_id, "end_interview")
+    assert started["state"]["task_queue"] == ["jd_parse"]
+    assert review["interrupt"]["type"] == "final_review"
+    assert review["state"]["task_queue"] == ["jd_parse"]
+
+    resumed = _run_interview_child(checkpoint_path, thread_id, "approve_report")
+    assert resumed["interrupt"]["type"] == "final_review"
+    assert resumed["state"]["review_target"] == "jd_parsed"
+    assert resumed["state"]["task_queue"] == []
 
 
 

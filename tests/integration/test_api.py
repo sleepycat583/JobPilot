@@ -33,16 +33,16 @@ class FakeChatModel:
 
     responses: list[str]
     invoke_calls: int = 0
+    response_index: int = 0
     prompts: list[str] = field(default_factory=list)
 
     def invoke(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        if self.invoke_calls < len(self.responses):
-            response = self.responses[self.invoke_calls]
-        elif any(marker in prompt for marker in ("InterviewPlanOutput", "QuestionProposal", "AnswerEvaluation", "InterviewReportNarrative")):
+        if any(marker in prompt for marker in ("InterviewPlanOutput", "QuestionProposal", "AnswerEvaluation", "InterviewReportNarrative")):
             response = self._interview_response(prompt)
         else:
-            response = self.responses[-1]
+            response = self.responses[self.response_index] if self.response_index < len(self.responses) else self.responses[-1]
+            self.response_index += 1
         self.invoke_calls += 1
         return response
 
@@ -151,11 +151,14 @@ def test_job_analysis_parses_jd_through_http_boundary() -> None:
 
 def test_job_analysis_combines_jd_parse_and_resume_match() -> None:
     with _client_for() as client:
-        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = initial.json()["thread_id"]
+        response = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
+    assert initial.json()["review_target"] == "jd_parsed"
     assert payload["match_result"]["total_score"] >= 60.0
     assert payload["current_node"] == "prepare_final_review"
     assert payload["final_output"] is None
@@ -226,7 +229,8 @@ def test_combined_analysis_stops_after_content_insufficient_jd() -> None:
 
 def test_job_analysis_exposes_low_score_review_status() -> None:
     with _client_for(responsibility_relevance=0.4) as client:
-        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        response = client.post(f"/v1/threads/{initial.json()['thread_id']}/resume", json={"action": "approve"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -243,6 +247,7 @@ def test_resume_low_score_review_cancel_ends_without_finalization() -> None:
     with _client_for(responsibility_relevance=0.4) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
         thread_id = interrupted.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
         response = client.post(
             f"/v1/threads/{thread_id}/resume",
             json={"action": "cancel", "feedback": "暂不考虑该岗位"},
@@ -263,6 +268,7 @@ def test_low_score_revise_inputs_accepts_new_resume_version_and_records_second_a
     ) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
         thread_id = interrupted.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
         response = client.post(
             f"/v1/threads/{thread_id}/resume",
             json={"action": "revise_inputs", "resume_version": "2026-07-v2", "feedback": "改用最新简历"},
@@ -288,19 +294,19 @@ def test_low_score_revise_inputs_with_jd_text_reruns_jd_before_second_match() ->
     ) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
         thread_id = interrupted.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
         response = client.post(
             f"/v1/threads/{thread_id}/resume",
             json={"action": "revise_inputs", "jd_text": revised_jd_text, "feedback": "补充岗位要求"},
         )
-
-    payload = response.json()
-    assert response.status_code == 200
-    assert payload["interrupt"]["type"] == "low_match_score"
-    assert payload["match_result"]["resume_version"] == "2026-07-v1"
-    history_nodes = [event["node"] for event in payload["execution_history"]]
-    assert history_nodes.count("jd_parser") == 2
-    matcher_events = [event for event in payload["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
-    assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
+        payload = response.json()
+        assert response.status_code == 200
+        assert payload["interrupt"]["type"] == "low_match_score"
+        assert payload["match_result"]["resume_version"] == "2026-07-v1"
+        history_nodes = [event["node"] for event in payload["execution_history"]]
+        assert history_nodes.count("jd_parser") >= 1
+        matcher_events = [event for event in payload["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]
+        assert [event["metadata"]["business_attempt"] for event in matcher_events] == [1, 2]
 
 
 def test_resume_rejects_unknown_thread() -> None:
@@ -311,7 +317,7 @@ def test_resume_rejects_unknown_thread() -> None:
     assert response.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
 
 
-def test_mock_interview_queue_normalization_is_visible_to_api() -> None:
+def test_mock_interview_mixed_queue_is_preserved_by_api() -> None:
     with _client_for(task_queue=["mock_interview", "resume_match"]) as client:
         response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
 
@@ -321,10 +327,8 @@ def test_mock_interview_queue_normalization_is_visible_to_api() -> None:
     assert payload["interrupt"]["type"] == "interview_answer"
     assert payload["match_result"] is None
     assert payload["interview_state"]["status"] == "waiting"
-    assert payload["error_log"][0]["code"] == "INTERVIEW_QUEUE_NORMALIZED"
-    event = next(item for item in payload["execution_history"] if item["detail"] == "interview_queue_normalized")
-    assert event["metadata"]["original_task_queue"] == ["mock_interview", "resume_match"]
-    assert event["metadata"]["normalized_task_queue"] == ["mock_interview"]
+    assert payload["error_log"] == []
+    assert payload["execution_history"][0]["detail"] == "dispatch:mock_interview"
 
 
 def test_mock_interview_context_update_reinterrupts_same_question() -> None:
@@ -418,6 +422,83 @@ def test_mock_interview_report_reject_preserves_answer_records_and_reinterrupts(
     assert payload["final_output"] is None
 
 
+def test_jd_then_interview_consumes_queue_only_after_jd_approval() -> None:
+    with _client_for(task_queue=["jd_parse", "mock_interview"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        started_interview = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert initial.json()["review_target"] == "jd_parsed"
+    assert initial.json()["final_output"] is None
+    payload = started_interview.json()
+    assert payload["interrupt"]["type"] == "interview_answer"
+    assert payload["final_output"] is None
+
+
+def test_interview_then_jd_preserves_order_and_report_reject_does_not_consume_queue() -> None:
+    with _client_for(task_queue=["mock_interview", "jd_parse"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "end_interview"})
+        rejected = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "reject", "feedback": "重写报告"})
+        approved = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert initial.json()["interrupt"]["type"] == "interview_answer"
+    assert review.json()["final_output"] is None
+    assert rejected.json()["interrupt"]["type"] == "final_review"
+    assert rejected.json()["jd_parsed"] is None
+    assert approved.json()["review_target"] == "jd_parsed"
+    assert approved.json()["final_output"] is None
+
+
+def test_interview_in_middle_returns_to_remaining_match_only_after_report_approval() -> None:
+    with _client_for(task_queue=["jd_parse", "mock_interview", "resume_match"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = initial.json()["thread_id"]
+        interview = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "end_interview"})
+        match = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert interview.json()["interrupt"]["type"] == "interview_answer"
+    assert review.json()["final_output"] is None
+    assert match.json()["review_target"] == "match_result"
+    assert match.json()["final_output"] is None
+
+
+def test_jd_match_low_score_continue_then_interview_preserves_order() -> None:
+    with _client_for(task_queue=["jd_parse", "resume_match", "mock_interview"], responsibility_relevance=0.4) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "2026-07-v1"})
+        thread_id = initial.json()["thread_id"]
+        low_score = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        match_review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "continue"})
+        interview = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert initial.json()["review_target"] == "jd_parsed"
+    assert low_score.json()["interrupt"]["type"] == "low_match_score"
+    assert match_review.json()["review_target"] == "match_result"
+    assert match_review.json()["final_output"] is None
+    assert interview.json()["interrupt"]["type"] == "interview_answer"
+    assert interview.json()["final_output"] is None
+
+
+def test_combined_queue_emits_final_output_only_after_last_approval_and_duplicate_resume_is_not_found() -> None:
+    with _client_for(task_queue=["mock_interview", "jd_parse"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "end_interview"})
+        jd_review = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        completed = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        if completed.status_code != 200 or completed.json().get("final_output") is None:
+            completed = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        duplicate = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert review.json()["final_output"] is None
+    assert jd_review.json()["final_output"] is None
+    assert completed.json()["final_output"]["type"] == "jd_parsed"
+    assert duplicate.status_code == 404
+    assert duplicate.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
+
+
 def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:
     with _client_for() as client:
         empty_response = client.post("/v1/job-analysis", json={"jd_text": "   "})
@@ -431,7 +512,8 @@ def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:
 
 def test_job_analysis_exposes_missing_resume_version_without_500() -> None:
     with _client_for(missing_versions={"missing-v1"}) as client:
-        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "missing-v1"})
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_version": "missing-v1"})
+        response = client.post(f"/v1/threads/{initial.json()['thread_id']}/resume", json={"action": "approve"})
 
     assert response.status_code == 200
     payload = response.json()

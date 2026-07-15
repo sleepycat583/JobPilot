@@ -141,7 +141,7 @@ def build_graph(
     graph.add_conditional_edges(
         "jd_parser",
         _resolve_jd_completion_route,
-        {"continue": "queue_dispatch", "error": "error_node"},
+        {"prepare_review": "prepare_final_review", "error": "error_node"},
     )
     graph.add_edge("prepare_final_review", "final_review_gate")
     graph.add_conditional_edges(
@@ -163,19 +163,23 @@ def build_graph(
     graph.add_conditional_edges(
         "resume_matcher",
         _resolve_match_result_route,
-        {"prepare_review": "prepare_low_score_review", "continue": "low_score_gate"},
+        {"low_score": "prepare_low_score_review", "prepare_review": "prepare_final_review"},
     )
     graph.add_edge("prepare_low_score_review", "low_score_gate")
     graph.add_conditional_edges(
         "low_score_gate",
         _resolve_low_score_gate_route,
         {
-            "continue": "queue_dispatch",
+            "continue": "prepare_final_review",
             "cancel": "low_score_cancelled",
             "revise": "revision_dispatch",
         },
     )
-    graph.add_edge("finalize_node", END)
+    graph.add_conditional_edges(
+        "finalize_node",
+        _resolve_finalize_route,
+        {"continue": "queue_dispatch", "end": END},
+    )
     graph.add_edge("low_score_cancelled", END)
     graph.add_edge("interview_simulator", "ask_question")
     graph.add_edge("ask_question", "interview_await_answer")
@@ -248,12 +252,12 @@ def _resolve_queue_dispatch_route(state: JobAssistantState) -> str:
 
 
 def _resolve_jd_completion_route(state: JobAssistantState) -> str:
-    """阻断无法用于简历匹配的 JD 降级结果，保留其原始错误码。"""
+    """阻断降级 JD；成功产物必须先通过最终核可才可消费下一项。"""
 
     error_codes = {entry.get("code") for entry in state.get("error_log", [])}
     if {CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE} & error_codes:
         return "error"
-    return "continue"
+    return "prepare_review"
 
 
 def _resolve_low_score_gate_route(state: JobAssistantState) -> str:
@@ -265,10 +269,10 @@ def _resolve_low_score_gate_route(state: JobAssistantState) -> str:
 
 
 def _resolve_match_result_route(state: JobAssistantState) -> str:
-    """将低分匹配结果先送入持久化审核准备节点。"""
+    """低分先进入确认 Gate，其余匹配结果直接等待最终核可。"""
 
     match_result = state.get("match_result")
-    return "prepare_review" if bool(getattr(match_result, "low_score_review_required", False)) else "continue"
+    return "low_score" if bool(getattr(match_result, "low_score_review_required", False)) else "prepare_review"
 
 
 def _resolve_final_review_route(state: JobAssistantState) -> str:
@@ -277,14 +281,18 @@ def _resolve_final_review_route(state: JobAssistantState) -> str:
     return "reject" if state.get("review_status") == "rejected" else "approve"
 
 
+def _resolve_finalize_route(state: JobAssistantState) -> str:
+    """已批准当前产物后，仅在仍有任务时回到队列分发。"""
+
+    return "continue" if state.get("task_queue") else "end"
+
+
 def _resolve_revision_target_route(state: JobAssistantState) -> str:
     """按审核目标将修订流返回对应 Worker，避免重新执行无关任务。"""
 
     # 面试复盘修订只允许重建报告；不能因未来队列策略变动而重新消费业务任务。
     if state.get("review_target") == "interview_report":
         return "generate_review_report"
-    if state.get("task_queue"):
-        return "queue_dispatch"
     return {"jd_parsed": "jd_parser", "match_result": "resume_matcher"}.get(state.get("review_target"), "error")
 
 

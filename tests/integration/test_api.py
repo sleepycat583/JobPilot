@@ -49,8 +49,7 @@ class FakeChatModel:
     def bind(self, **_: Any) -> "FakeChatModel":
         return self
 
-    @staticmethod
-    def _interview_response(prompt: str) -> str:
+    def _interview_response(self, prompt: str) -> str:
         if "InterviewPlanOutput" in prompt:
             return '{"plan":[{"topic_id":"project","topic":"项目经历","objective":"考察项目贡献","priority":"core","basis":"user_goal"},{"topic_id":"foundation","topic":"技术基础","objective":"考察基础","priority":"core","basis":"user_goal"}]}'
         if "QuestionProposal" in prompt:
@@ -62,6 +61,15 @@ class FakeChatModel:
         if "InterviewReportNarrative" in prompt:
             return '{"performance_summary":"样本不足。","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'
         return self.responses[-1]
+
+
+def test_fake_chat_model_interview_response_fallback_returns_last_response() -> None:
+    """兜底分支需要访问 self.responses，_interview_response 必须是实例方法而非 staticmethod。"""
+    model = FakeChatModel(responses=["first", "last"])
+
+    result = model._interview_response("prompt without any interview marker")
+
+    assert result == "last"
 
 
 @dataclass

@@ -68,6 +68,23 @@ class AnswerEvaluation(BaseModel):
         return self
 
 
+class InterviewPlanOutput(BaseModel):
+    """LLM 生成的计划主题，程序随后补齐可恢复 InterviewState。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: list[InterviewTopicPlan] = Field(min_length=1, max_length=15)
+
+
+class QuestionProposal(BaseModel):
+    """LLM 生成的下一题内容；题号和追问关联由程序确定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(min_length=1, max_length=200)
+    question: str = Field(min_length=1, max_length=2000)
+
+
 class QuestionRecord(BaseModel):
     """单题题目、回答和评价的可恢复记录。
 
@@ -128,6 +145,18 @@ class ReviewAction(BaseModel):
     study_topic: str
     practice_action: str
     verification: str
+
+
+class InterviewReportNarrative(BaseModel):
+    """LLM 生成的复盘叙述，不含程序计算的分数和覆盖元数据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    performance_summary: str = Field(min_length=1, max_length=4000)
+    recurring_strengths: list[str] = Field(default_factory=list, max_length=10)
+    recurring_weaknesses: list[str] = Field(default_factory=list, max_length=10)
+    review_actions: list[ReviewAction] = Field(default_factory=list, max_length=10)
+    question_references: list[str] = Field(default_factory=list, max_length=15)
 
 
 class InterviewReport(BaseModel):

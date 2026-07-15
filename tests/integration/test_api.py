@@ -37,12 +37,31 @@ class FakeChatModel:
 
     def invoke(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        response = self.responses[min(self.invoke_calls, len(self.responses) - 1)]
+        if self.invoke_calls < len(self.responses):
+            response = self.responses[self.invoke_calls]
+        elif any(marker in prompt for marker in ("InterviewPlanOutput", "QuestionProposal", "AnswerEvaluation", "InterviewReportNarrative")):
+            response = self._interview_response(prompt)
+        else:
+            response = self.responses[-1]
         self.invoke_calls += 1
         return response
 
     def bind(self, **_: Any) -> "FakeChatModel":
         return self
+
+    @staticmethod
+    def _interview_response(prompt: str) -> str:
+        if "InterviewPlanOutput" in prompt:
+            return '{"plan":[{"topic_id":"project","topic":"项目经历","objective":"考察项目贡献","priority":"core","basis":"user_goal"},{"topic_id":"foundation","topic":"技术基础","objective":"考察基础","priority":"core","basis":"user_goal"}]}'
+        if "QuestionProposal" in prompt:
+            if "'question_id': 'q-1'" in prompt:
+                return '{"topic":"技术基础","question":"请说明一次性能排查。"}'
+            return '{"topic":"项目经历","question":"请介绍一个你负责的项目。"}'
+        if "AnswerEvaluation" in prompt:
+            return '{"scores":{"technical_accuracy":70,"structure":70,"job_relevance":70,"evidence":70},"feedback":"ok","strengths":[],"issues":[],"answer_relevance":"on_topic","fatal_error":false,"fatal_error_reason":null}'
+        if "InterviewReportNarrative" in prompt:
+            return '{"performance_summary":"样本不足。","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'
+        return self.responses[-1]
 
 
 @dataclass
@@ -325,7 +344,7 @@ def test_mock_interview_context_update_reinterrupts_same_question() -> None:
     assert payload["interview_state"]["user_context_updates"][-1] == "项目峰值QPS是1200"
 
 
-def test_mock_interview_submit_answer_ends_in_evaluating_state() -> None:
+def test_mock_interview_submit_answer_evaluates_and_waits_for_next_question() -> None:
     with _client_for(task_queue=["mock_interview"]) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
         thread_id = interrupted.json()["thread_id"]
@@ -336,12 +355,12 @@ def test_mock_interview_submit_answer_ends_in_evaluating_state() -> None:
 
     payload = response.json()
     assert response.status_code == 200
-    assert payload["status"] == "completed"
-    assert payload["interview_state"]["status"] == "evaluating"
+    assert payload["status"] == "interrupted"
+    assert payload["interview_state"]["status"] == "waiting"
     assert payload["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
 
 
-def test_mock_interview_end_marks_completed_without_report() -> None:
+def test_mock_interview_end_generates_report_without_final_review() -> None:
     with _client_for(task_queue=["mock_interview"]) as client:
         interrupted = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
         thread_id = interrupted.json()["thread_id"]
@@ -355,7 +374,8 @@ def test_mock_interview_end_marks_completed_without_report() -> None:
     assert payload["status"] == "completed"
     assert payload["interview_state"]["status"] == "completed"
     assert payload["interview_state"]["current_question_id"] is None
-    assert payload["interview_state"]["report"] is None
+    assert payload["interview_state"]["report"] is not None
+    assert payload["final_output"] is None
 
 
 def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:

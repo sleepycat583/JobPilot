@@ -116,9 +116,12 @@ def interview_await_answer_node(state: JobAssistantState) -> dict[str, object]:
             "execution_history": [_build_event("interview_await_answer", "resume", "interview_context_updated")],
         }
     if action == "end_interview":
+        # 用户在等待态结束时，当前题没有回答也没有评价，不能伪装成报告样本。
+        completed_records = [record for record in interview_state.question_records if record.question_id != current_record.question_id or record.answer.strip()]
         return {
             "current_node": "interview_await_answer",
-            "interview_state": interview_state.model_copy(update={"status": "completed", "current_question_id": None}),
+            "interview_state": interview_state.model_copy(update={"status": "completed", "current_question_id": None, "question_records": completed_records}),
+            "interview_completion_reason": "user_ended",
             "execution_history": [_build_event("interview_await_answer", "resume", "interview_ended")],
         }
     raise ValueError("Unsupported interview action")

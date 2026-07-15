@@ -10,6 +10,9 @@ from langgraph.types import Command
 
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
+from app.graph.builder import _resolve_interview_decision_route
+from app.agents.interview_simulator import interview_decision_node
+from app.schemas.interview import InterviewState, InterviewTopicPlan, QuestionRecord
 from app.schemas.jd import JDParsed, SkillRequirement
 
 
@@ -21,12 +24,27 @@ class FakeChatModel:
 
     def invoke(self, prompt: str) -> Any:
         self.prompts.append(prompt)
-        response = self.responses[min(self.invoke_calls, len(self.responses) - 1)]
+        response = self.responses[self.invoke_calls] if self.invoke_calls < len(self.responses) else self._interview_response(prompt)
         self.invoke_calls += 1
         return response
 
     def bind(self, **_: Any) -> "FakeChatModel":
         return self
+
+    def _interview_response(self, prompt: str) -> str:
+        if "Question IDs: []" in prompt or "records: []" in prompt or "overall: 0.0" in prompt:
+            return '{"performance_summary":"尚无有效回答，样本不足。","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'
+        if "InterviewPlanOutput" in prompt:
+            return '{"plan":[{"topic_id":"project","topic":"项目经历","objective":"考察项目贡献","priority":"core","basis":"user_goal"},{"topic_id":"foundation","topic":"技术基础","objective":"考察技术基础","priority":"core","basis":"user_goal"}]}'
+        if "QuestionProposal" in prompt:
+            if "'question_id': 'q-1'" in prompt:
+                return '{"topic":"技术基础","question":"请解释一次性能排查过程。"}'
+            return '{"topic":"项目经历","question":"请介绍一个你负责的项目。"}'
+        if "AnswerEvaluation" in prompt:
+            return '{"scores":{"technical_accuracy":70,"structure":70,"job_relevance":70,"evidence":70},"feedback":"ok","strengths":[],"issues":[],"answer_relevance":"on_topic","fatal_error":false,"fatal_error_reason":null}'
+        if "InterviewReportNarrative" in prompt:
+            return '{"performance_summary":"样本不足。","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":["q-1"]}'
+        return self.responses[-1]
 
 
 @dataclass
@@ -164,7 +182,7 @@ def test_invalid_route_never_enters_worker_placeholder_nodes() -> None:
     [
         ("jd_parser", "queue_dispatch"),
         ("resume_matcher", "prepare_low_score_review"),
-        ("interview_simulator", "interview_await_answer"),
+        ("interview_simulator", "ask_question"),
         ("clarify_node", END),
         ("out_of_scope_node", END),
         ("error_node", END),
@@ -314,16 +332,17 @@ def test_revise_inputs_checkpoint_history_preserves_full_review_lifecycle() -> N
 
 
 @pytest.mark.core_agent_tests
-def test_interview_skeleton_waits_for_answer_and_does_not_enter_final_review() -> None:
+def test_interview_plan_asks_first_question_with_default_eight_and_does_not_enter_final_review() -> None:
     graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "interview-wait-test"}}
 
     result = graph.invoke({"user_input": "开始模拟面试"}, config=config)
 
-    assert result["current_node"] == "interview_simulator"
+    assert result["current_node"] == "ask_question"
     interview_state = result["interview_state"]
     assert interview_state.status == "waiting"
-    assert interview_state.current_question_id == "skeleton-q1"
+    assert interview_state.target_question_count == 8
+    assert interview_state.current_question_id == "q-1"
     snapshot = graph.get_state(config)
     assert snapshot.tasks[0].interrupts[0].value["type"] == "interview_answer"
     assert result.get("final_output") is None
@@ -339,24 +358,25 @@ def test_interview_context_update_reinterrupts_same_question() -> None:
 
     assert resumed["interview_state"].status == "waiting"
     assert resumed["interview_state"].user_context_updates[-1] == "项目峰值QPS为1200"
-    assert graph.get_state(config).tasks[0].interrupts[0].value["question_id"] == "skeleton-q1"
+    assert graph.get_state(config).tasks[0].interrupts[0].value["question_id"] == "q-1"
 
 
 @pytest.mark.core_agent_tests
-def test_interview_submit_answer_transitions_to_evaluating_and_ends() -> None:
+def test_interview_submit_answer_evaluates_and_waits_for_next_question() -> None:
     graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "interview-answer-test"}}
     graph.invoke({"user_input": "开始模拟面试"}, config=config)
 
     resumed = graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
 
-    assert resumed["interview_state"].status == "evaluating"
+    assert resumed["interview_state"].status == "waiting"
     assert resumed["interview_state"].question_records[0].answer == "我负责过缓存优化项目。"
-    assert resumed["current_node"] == "interview_await_answer"
+    assert resumed["interview_state"].question_records[0].scores["technical_accuracy"] == 70.0
+    assert resumed["current_node"] == "ask_question"
 
 
 @pytest.mark.core_agent_tests
-def test_interview_end_marks_completed_without_report() -> None:
+def test_interview_end_generates_report_without_final_review_in_this_commit() -> None:
     graph = build_graph(FakeChatModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "interview-end-test"}}
     graph.invoke({"user_input": "开始模拟面试"}, config=config)
@@ -365,4 +385,44 @@ def test_interview_end_marks_completed_without_report() -> None:
 
     assert resumed["interview_state"].status == "completed"
     assert resumed["interview_state"].current_question_id is None
-    assert resumed["interview_state"].report is None
+    assert resumed["interview_state"].report is not None
+    assert resumed.get("final_output") is None
+    assert resumed.get("review_target") is None
+
+
+@pytest.mark.core_agent_tests
+def test_interview_graph_decision_routes_fifteenth_record_to_report_not_ask_question() -> None:
+    """验证 15 题硬上限在 Graph 决策层阻止第 16 次 ask_question。"""
+
+    records = [
+        QuestionRecord(
+            question_id=f"q-{index}",
+            topic="项目经历",
+            question=f"问题 {index}",
+            answer="回答",
+            follow_up_of=None,
+            scores={"technical_accuracy": 70.0, "structure": 70.0, "job_relevance": 70.0, "evidence": 70.0},
+            feedback="ok",
+            strengths=[],
+            issues=[],
+            answer_relevance="on_topic",
+        )
+        for index in range(1, 16)
+    ]
+    state = {
+        "interview_state": InterviewState(
+            status="evaluating",
+            target_question_count=15,
+            current_question_id="q-15",
+            question_records=records,
+            user_context_updates=[],
+            report=None,
+            plan=[InterviewTopicPlan(topic_id="project", topic="项目经历", objective="考察项目", priority="core", basis="general")],
+        )
+    }
+
+    update = interview_decision_node(state)
+
+    assert update["interview_next_action"] == "finish"
+    assert update["interview_completion_reason"] == "max_questions_reached"
+    assert _resolve_interview_decision_route({**state, **update}) == "report"

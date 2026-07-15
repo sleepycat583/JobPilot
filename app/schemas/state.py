@@ -66,6 +66,9 @@ class JobAssistantState(TypedDict, total=False):
     jd_parsed: JDParsed | None
     match_result: MatchResult | None
     interview_state: InterviewState | None
+    interview_next_action: str | None
+    interview_follow_up_of: str | None
+    interview_completion_reason: Literal["target_reached", "topics_completed", "user_ended", "max_questions_reached"] | None
     resume_version: str | None
 
     review_status: ReviewStatus

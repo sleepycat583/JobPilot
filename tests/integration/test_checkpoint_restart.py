@@ -133,7 +133,19 @@ from app.graph.checkpoint import open_sqlite_checkpointer
 class Model:
     calls: int = 0
     def invoke(self, prompt: str) -> str:
-        value = '{"route":"mock_interview","confidence":0.95,"reason":"interview","task_queue":["mock_interview"]}'
+        if "InterviewPlanOutput" in prompt:
+            value = '{"plan":[{"topic_id":"project","topic":"project","objective":"assess contribution","priority":"core","basis":"user_goal"},{"topic_id":"foundation","topic":"foundation","objective":"assess fundamentals","priority":"core","basis":"user_goal"}]}'
+        elif "QuestionProposal" in prompt:
+            if "'question_id': 'q-1'" in prompt:
+                value = '{"topic":"foundation","question":"Explain a performance investigation."}'
+            else:
+                value = '{"topic":"project","question":"Describe a project you owned."}'
+        elif "AnswerEvaluation" in prompt:
+            value = '{"scores":{"technical_accuracy":70,"structure":70,"job_relevance":70,"evidence":70},"feedback":"ok","strengths":[],"issues":[],"answer_relevance":"on_topic","fatal_error":false,"fatal_error_reason":null}'
+        elif "InterviewReportNarrative" in prompt:
+            value = '{"performance_summary":"limited sample","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'
+        else:
+            value = '{"route":"mock_interview","confidence":0.95,"reason":"interview","task_queue":["mock_interview"]}'
         self.calls += 1
         return value
     def bind(self, **_: Any): return self
@@ -297,8 +309,8 @@ def test_sqlite_checkpoint_recovers_complete_state_in_fresh_process(
 
 
 @pytest.mark.core_agent_tests
-def test_interview_skeleton_recovers_across_three_processes_without_rerunning_supervisor(tmp_path: Path) -> None:
-    """验证面试骨架的等待、补充背景和提交回答都能按同一 thread_id 恢复。"""
+def test_interview_recovers_across_three_processes_without_rerunning_supervisor(tmp_path: Path) -> None:
+    """验证完整面试的等待、补充背景和当前题评价能按同一 thread_id 恢复。"""
 
     checkpoint_path = tmp_path / "interview-checkpoints.sqlite3"
     thread_id = "interview-restart-proof"
@@ -306,7 +318,8 @@ def test_interview_skeleton_recovers_across_three_processes_without_rerunning_su
     interrupted = _run_interview_child(checkpoint_path, thread_id, "interrupt")
     assert interrupted["interrupt"]["type"] == "interview_answer"
     assert interrupted["state"]["interview_state"]["status"] == "waiting"
-    assert interrupted["model_calls"] == 1
+    assert interrupted["state"]["interview_state"]["target_question_count"] == 8
+    assert interrupted["model_calls"] == 3
 
     updated = _run_interview_child(checkpoint_path, thread_id, "context_update")
     assert updated["interrupt"]["type"] == "interview_answer"
@@ -315,6 +328,7 @@ def test_interview_skeleton_recovers_across_three_processes_without_rerunning_su
     assert updated["model_calls"] == 0
 
     answered = _run_interview_child(checkpoint_path, thread_id, "submit_answer")
-    assert answered["state"]["interview_state"]["status"] == "evaluating"
+    assert answered["state"]["interview_state"]["status"] == "waiting"
     assert answered["state"]["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
-    assert answered["model_calls"] == 0
+    assert answered["state"]["interview_state"]["question_records"][0]["scores"]["technical_accuracy"] == 70.0
+    assert answered["model_calls"] == 2

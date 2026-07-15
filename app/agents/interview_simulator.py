@@ -27,6 +27,69 @@ from app.services.structured_output import StructuredPromptContext, StructuredOu
 QuestionMode = Literal["primary", "retry_same_question", "clarification_follow_up", "evidence_follow_up"]
 
 
+def interview_plan_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
+    """Graph 入口：生成计划并初始化默认 8 题的可恢复面试状态。"""
+
+    result = build_interview_plan(
+        chat_model,
+        user_goal=str(state.get("user_input", "")),
+        jd_parsed=state.get("jd_parsed") if isinstance(state.get("jd_parsed"), JDParsed) else None,
+        match_result=state.get("match_result") if isinstance(state.get("match_result"), MatchResult) else None,
+    )
+    if result.value is None:
+        raise ValueError("interview plan generation degraded after structured-output retries")
+    return {"current_node": "interview_plan", "interview_state": initialize_interview_state(result.value), "retry_count": {"interview_plan": result.retry_count}, "error_log": result.error_log}
+
+
+def ask_question_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
+    """Graph 节点：依据上一次决策生成并追加一条等待态题目。"""
+
+    interview_state = _require_state(state)
+    pending = state.get("interview_next_action", "primary")
+    mode = pending if pending in {"primary", "retry_same_question", "clarification_follow_up", "evidence_follow_up"} else "primary"
+    parent_id = state.get("interview_follow_up_of")
+    result = ask_question(chat_model, interview_state, mode=mode, follow_up_of=parent_id if isinstance(parent_id, str) else None)
+    if result.value is None:
+        raise ValueError("question generation degraded after structured-output retries")
+    updated = interview_state.model_copy(update={"status": "waiting", "current_question_id": result.value.question_id, "question_records": [*interview_state.question_records, result.value]})
+    return {"current_node": "ask_question", "interview_state": updated, "interview_next_action": None, "interview_follow_up_of": None, "retry_count": {"ask_question": result.retry_count}, "error_log": result.error_log}
+
+
+def evaluate_answer_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
+    """Graph 节点：只评价当前已回答题，并保留此前所有记录。"""
+
+    interview_state = _require_state(state)
+    current = _find_record(interview_state.question_records, interview_state.current_question_id or "")
+    result = evaluate_answer(chat_model, current, user_goal=str(state.get("user_input", "")))
+    if result.value is None:
+        raise ValueError("answer evaluation degraded after structured-output retries")
+    updated_records = [result.value if item.question_id == current.question_id else item for item in interview_state.question_records]
+    return {"current_node": "evaluate_answer", "interview_state": interview_state.model_copy(update={"status": "evaluating", "question_records": updated_records}), "retry_count": {"evaluate_answer": result.retry_count}, "error_log": result.error_log}
+
+
+def interview_decision_node(state: dict[str, object]) -> dict[str, object]:
+    """Graph 节点：调用确定性规则，将评价转换为受限的下一跳动作。"""
+
+    from app.services.interview_scoring import decide_next_interview_action
+
+    interview_state = _require_state(state)
+    current = interview_state.question_records[-1] if interview_state.question_records else None
+    decision = decide_next_interview_action(interview_state, current_question_retried=bool(current and current.follow_up_of))
+    return {"current_node": "interview_decision", "interview_next_action": decision.action, "interview_completion_reason": decision.completion_reason, "interview_follow_up_of": current.question_id if current and decision.action != "next_topic" and decision.action != "finish" else None}
+
+
+def generate_review_report_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
+    """Graph 节点：生成 report，但本提交不进入最终核可 Gate。"""
+
+    interview_state = _require_state(state)
+    reason = state.get("interview_completion_reason", "user_ended")
+    result = generate_review_report(chat_model, interview_state, completion_reason=reason, jd_parsed=state.get("jd_parsed") if isinstance(state.get("jd_parsed"), JDParsed) else None)
+    if result.value is None:
+        raise ValueError("review report generation degraded after structured-output retries")
+    completed = interview_state.model_copy(update={"status": "completed", "current_question_id": None, "report": result.value})
+    return {"current_node": "generate_review_report", "interview_state": completed, "retry_count": {"generate_review_report": result.retry_count}, "error_log": result.error_log}
+
+
 def build_interview_plan(
     chat_model: Any,
     *,
@@ -183,6 +246,9 @@ def generate_review_report(
     if raw_result.value is None:
         return StructuredOutputResult(value=None, retry_count=raw_result.retry_count, error_log=raw_result.error_log, degraded=True)
     narrative = raw_result.value
+    # 空样本复盘没有合法题号；清空模型误带的引用，避免为“尚未回答”制造题目事实。
+    if not allowed_ids and (narrative.question_references or narrative.review_actions):
+        narrative = narrative.model_copy(update={"question_references": [], "review_actions": []})
     _validate_report_references(narrative, allowed_ids)
     report = InterviewReport(
         overall_score=score.overall_score,
@@ -216,6 +282,13 @@ def _find_record(records: list[QuestionRecord], question_id: str) -> QuestionRec
         if record.question_id == question_id:
             return record
     raise ValueError("follow_up_of must reference an existing question")
+
+
+def _require_state(state: dict[str, object]) -> InterviewState:
+    interview_state = state.get("interview_state")
+    if not isinstance(interview_state, InterviewState):
+        raise ValueError("interview node requires InterviewState")
+    return interview_state
 
 
 def _validate_plan_sources(plan: list[InterviewTopicPlan], has_jd: bool, has_match_result: bool) -> None:

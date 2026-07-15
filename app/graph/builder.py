@@ -16,6 +16,13 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.agents.jd_parser import jd_parser_node
 from app.agents.jd_parser import CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE
 from app.agents.resume_matcher import resume_matcher_node
+from app.agents.interview_simulator import (
+    ask_question_node,
+    evaluate_answer_node,
+    generate_review_report_node,
+    interview_decision_node,
+    interview_plan_node,
+)
 from app.agents.supervisor import supervisor_node
 from app.graph.control_nodes import (
     clarify_node,
@@ -23,7 +30,6 @@ from app.graph.control_nodes import (
     final_review_gate_node,
     finalize_node,
     interview_await_answer_node,
-    interview_simulator,
     low_score_gate_node,
     low_score_cancelled_node,
     out_of_scope_node,
@@ -84,8 +90,24 @@ def build_graph(
     graph.add_node("final_review_gate", final_review_gate_node)
     graph.add_node("revision_dispatch", revision_dispatch_node)
     graph.add_node("finalize_node", finalize_node)
-    graph.add_node("interview_simulator", interview_simulator)
+    def interview_plan_with_model(state: JobAssistantState) -> dict[str, object]:
+        return interview_plan_node(state, chat_model)
+
+    def ask_question_with_model(state: JobAssistantState) -> dict[str, object]:
+        return ask_question_node(state, chat_model)
+
+    def evaluate_answer_with_model(state: JobAssistantState) -> dict[str, object]:
+        return evaluate_answer_node(state, chat_model)
+
+    def generate_report_with_model(state: JobAssistantState) -> dict[str, object]:
+        return generate_review_report_node(state, chat_model)
+
+    graph.add_node("interview_simulator", interview_plan_with_model)
+    graph.add_node("ask_question", ask_question_with_model)
     graph.add_node("interview_await_answer", interview_await_answer_node)
+    graph.add_node("evaluate_answer", evaluate_answer_with_model)
+    graph.add_node("interview_decision", interview_decision_node)
+    graph.add_node("generate_review_report", generate_report_with_model)
     graph.add_node("clarify_node", clarify_node)
     graph.add_node("out_of_scope_node", out_of_scope_node)
     graph.add_node("error_node", error_node)
@@ -149,12 +171,20 @@ def build_graph(
     )
     graph.add_edge("finalize_node", END)
     graph.add_edge("low_score_cancelled", END)
-    graph.add_edge("interview_simulator", "interview_await_answer")
+    graph.add_edge("interview_simulator", "ask_question")
+    graph.add_edge("ask_question", "interview_await_answer")
     graph.add_conditional_edges(
         "interview_await_answer",
         _resolve_interview_resume_route,
-        {"wait": "interview_await_answer", "end": END},
+        {"wait": "interview_await_answer", "evaluate": "evaluate_answer", "report": "generate_review_report"},
     )
+    graph.add_edge("evaluate_answer", "interview_decision")
+    graph.add_conditional_edges(
+        "interview_decision",
+        _resolve_interview_decision_route,
+        {"ask": "ask_question", "report": "generate_review_report"},
+    )
+    graph.add_edge("generate_review_report", END)
     graph.add_edge("clarify_node", END)
     graph.add_edge("out_of_scope_node", END)
     graph.add_edge("error_node", END)
@@ -250,10 +280,19 @@ def _resolve_revision_target_route(state: JobAssistantState) -> str:
 
 
 def _resolve_interview_resume_route(state: JobAssistantState) -> str:
-    """面试骨架只有补充背景时再次等待；提交回答或结束后不进入最终核可。"""
+    """HITL 恢复后只路由当前题评价或报告，不进入最终核可。"""
 
     interview_state = state.get("interview_state")
-    return "wait" if isinstance(interview_state, object) and getattr(interview_state, "status", None) == "waiting" else "end"
+    status = getattr(interview_state, "status", None)
+    if status == "waiting":
+        return "wait"
+    return "evaluate" if status == "evaluating" else "report"
+
+
+def _resolve_interview_decision_route(state: JobAssistantState) -> str:
+    """由确定性 decision action 决定继续出题或生成 report。"""
+
+    return "report" if state.get("interview_next_action") == "finish" else "ask"
 
 
 def _build_event(node: str, event: str, detail: str) -> ExecutionEvent:

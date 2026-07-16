@@ -24,6 +24,7 @@ from app.agents.interview_simulator import (
     interview_plan_node,
 )
 from app.agents.supervisor import supervisor_node
+from app.graph.rolling_summary import rolling_summary_node
 from app.graph.control_nodes import (
     clarify_node,
     error_node,
@@ -62,6 +63,9 @@ def build_graph(
     def supervisor_with_model(state: JobAssistantState) -> dict[str, object]:
         return supervisor_node(state, chat_model)
 
+    def rolling_summary_with_model(state: JobAssistantState) -> dict[str, object]:
+        return rolling_summary_node(state, chat_model)
+
     def jd_parser_with_dependencies(state: JobAssistantState) -> dict[str, object]:
         return {
             **jd_parser_node(state, chat_model, search_backend),
@@ -79,6 +83,7 @@ def build_graph(
             return update
         return {**update, "review_status": "pending", "review_target": "match_result", "review_feedback": None}
 
+    graph.add_node("rolling_summary", rolling_summary_with_model)
     graph.add_node("supervisor", supervisor_with_model)
     graph.add_node("queue_dispatch", queue_dispatch_node)
     graph.add_node("jd_parser", jd_parser_with_dependencies)
@@ -112,7 +117,8 @@ def build_graph(
     graph.add_node("out_of_scope_node", out_of_scope_node)
     graph.add_node("error_node", error_node)
 
-    graph.set_entry_point("supervisor")
+    graph.set_entry_point("rolling_summary")
+    graph.add_edge("rolling_summary", "supervisor")
 
     graph.add_conditional_edges(
         "supervisor",

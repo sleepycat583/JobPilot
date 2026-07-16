@@ -105,16 +105,33 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
 def _build_supervisor_prompt(user_input: str, state: JobAssistantState) -> str:
     """构造 Supervisor 的完整业务 Prompt。"""
 
+    recent_messages = _recent_messages_for_prompt(state.get("messages", []), user_input)
+
     return (
         "You are a routing supervisor. Return only a JSON object that matches RouterDecision.\n"
         "Allowed routes: jd_parse, resume_match, mock_interview, clarify, out_of_scope.\n"
         "Do not perform JD parsing, resume matching, or interview generation.\n"
         f"User input: {user_input}\n"
         f"Conversation summary: {state.get('conversation_summary', '')}\n"
+        f"Recent conversation messages: {recent_messages}\n"
         f"Has JD: {state.get('jd_parsed') is not None}\n"
         f"Has match: {state.get('match_result') is not None}\n"
         f"Interview active: {state.get('interview_state') is not None}"
     )
+
+
+def _recent_messages_for_prompt(value: object, user_input: str) -> list[dict[str, str]]:
+    """返回合法最近消息，并避免把当前用户输入在 Prompt 中重复展示。"""
+    if not isinstance(value, list):
+        return []
+    messages = [
+        {"role": item["role"], "content": item["content"]}
+        for item in value
+        if isinstance(item, dict) and isinstance(item.get("role"), str) and isinstance(item.get("content"), str)
+    ]
+    if messages and messages[-1]["role"] == "user" and messages[-1]["content"].strip() == user_input:
+        return messages[:-1]
+    return messages
 
 
 def _build_error_entry(code: str, node: str, retryable: bool, attempt: int, message: str) -> ErrorEntry:

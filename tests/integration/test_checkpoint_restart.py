@@ -11,6 +11,41 @@ from pathlib import Path
 import pytest
 
 
+ROLLING_SUMMARY_CHILD_PROGRAM = r'''
+import json
+import sys
+from dataclasses import dataclass
+from langgraph.graph import END, StateGraph
+from app.graph.checkpoint import open_sqlite_checkpointer
+from app.graph.rolling_summary import rolling_summary_node
+from app.schemas.state import JobAssistantState
+
+path, thread_id, phase = sys.argv[1:]
+@dataclass
+class Model:
+    def invoke(self, prompt):
+        if phase == "fail":
+            return "not json"
+        return '{"user_goals":["准备后端岗位"],"confirmed_facts_and_decisions":[],"corrections_and_constraints":[],"unresolved_questions_and_next_actions":[],"approval_feedback":[],"interview_topics_and_scores":[]}'
+    def bind(self, **_): return self
+
+checkpointer, connection = open_sqlite_checkpointer(path)
+graph = StateGraph(JobAssistantState)
+def node(state): return rolling_summary_node(state, Model())
+graph.add_node("rolling_summary", node)
+graph.set_entry_point("rolling_summary")
+graph.add_edge("rolling_summary", END)
+compiled = graph.compile(checkpointer=checkpointer)
+config = {"configurable": {"thread_id": thread_id}}
+if phase in {"summarize", "fail"}:
+    messages = [{"role": "user", "content": f"消息{i}"} for i in range(12)]
+    compiled.invoke({"messages": messages, "conversation_summary": "旧摘要", "summarized_message_count": 2}, config=config)
+snapshot = compiled.get_state(config)
+print(json.dumps(snapshot.values))
+connection.close()
+'''
+
+
 CHILD_PROGRAM = r'''
 import json
 import sqlite3
@@ -194,6 +229,19 @@ def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, o
         text=True,
         encoding="utf-8",
         errors="replace",
+    )
+    return json.loads(completed.stdout)
+
+
+def _run_rolling_summary_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
+    """在两个独立进程间验证摘要后的最新 Checkpoint 语义。"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", ROLLING_SUMMARY_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     return json.loads(completed.stdout)
 
@@ -396,3 +444,31 @@ def test_interview_recovers_across_three_processes_without_rerunning_supervisor(
     assert answered["state"]["interview_state"]["question_records"][0]["answer"] == "我负责过缓存优化项目。"
     assert answered["state"]["interview_state"]["question_records"][0]["scores"]["technical_accuracy"] == 70.0
     assert answered["model_calls"] == 2
+
+
+@pytest.mark.core_agent_tests
+def test_rolling_summary_checkpoint_recovery_exposes_summary_and_six_recent_messages(tmp_path: Path) -> None:
+    """成功摘要后，最新恢复状态按 §5.4 只暴露摘要与最近六条原文。"""
+
+    checkpoint_path = tmp_path / "rolling-summary.sqlite3"
+    created = _run_rolling_summary_child(checkpoint_path, "summary-success", "summarize")
+    restored = _run_rolling_summary_child(checkpoint_path, "summary-success", "restore")
+
+    assert created == restored
+    assert restored["conversation_summary"] == "用户目标: 准备后端岗位"
+    assert restored["summarized_message_count"] == 8
+    assert [message["content"] for message in restored["messages"]] == [f"消息{i}" for i in range(6, 12)]
+
+
+@pytest.mark.core_agent_tests
+def test_rolling_summary_failed_checkpoint_recovery_preserves_all_messages(tmp_path: Path) -> None:
+    """失败降级不能在最新 Checkpoint 中丢失任何原消息或覆盖旧摘要。"""
+
+    checkpoint_path = tmp_path / "rolling-summary-failure.sqlite3"
+    _run_rolling_summary_child(checkpoint_path, "summary-failure", "fail")
+    restored = _run_rolling_summary_child(checkpoint_path, "summary-failure", "restore")
+
+    assert restored["conversation_summary"] == "旧摘要"
+    assert restored["summarized_message_count"] == 2
+    assert len(restored["messages"]) == 12
+    assert restored["error_log"][-1]["code"] == "SUMMARY_FAILED"

@@ -105,3 +105,34 @@ def test_supervisor_low_confidence_forces_clarify() -> None:
     assert decision.route == "clarify"
     assert decision.confidence == 0.69
     assert result["task_queue"] == []
+
+
+@pytest.mark.core_agent_tests
+def test_supervisor_includes_summary_and_recent_messages_without_duplicate_current_input() -> None:
+    model = FakeChatModel('{"route":"jd_parse","confidence":0.9,"reason":"JD","task_queue":[]}')
+
+    supervisor_node(
+        {
+            "user_input": "分析这个JD",
+            "conversation_summary": "用户要投后端岗位",
+            "messages": [
+                {"role": "assistant", "content": "请提供JD"},
+                {"role": "user", "content": "分析这个JD"},
+            ],
+        },
+        model,
+    )
+
+    assert "Conversation summary: 用户要投后端岗位" in model.prompts[0]
+    assert "请提供JD" in model.prompts[0]
+    assert model.prompts[0].count("分析这个JD") == 1
+
+
+@pytest.mark.core_agent_tests
+def test_supervisor_empty_input_with_history_still_short_circuits_before_prompt() -> None:
+    model = FakeChatModel('{"route":"jd_parse","confidence":0.9,"reason":"unused","task_queue":[]}')
+
+    result = supervisor_node({"user_input": " ", "messages": [{"role": "user", "content": "旧消息"}]}, model)
+
+    assert model.invoke_calls == 0
+    assert result["route_decision"].route == "clarify"

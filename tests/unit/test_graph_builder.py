@@ -11,10 +11,23 @@ from langgraph.types import Command
 
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
-from app.graph.builder import _guard_route, _resolve_interview_decision_route
+from app.graph.builder import (
+    _guard_route,
+    _resolve_finalize_route,
+    _resolve_final_review_route,
+    _resolve_interview_decision_route,
+    _resolve_interview_resume_route,
+    _resolve_jd_completion_route,
+    _resolve_low_score_gate_route,
+    _resolve_match_result_route,
+    _resolve_queue_dispatch_route,
+    _resolve_revision_target_route,
+)
+from app.graph.routing import resolve_route_node
 from app.agents.interview_simulator import _assert_question_records_unchanged, interview_decision_node
 from app.schemas.interview import InterviewState, InterviewTopicPlan, QuestionRecord
 from app.schemas.jd import JDParsed, SkillRequirement
+from app.schemas.router import RouterDecision
 
 
 @dataclass
@@ -103,21 +116,37 @@ def _build_llm_analysis(responsibility_relevance: float) -> str:
 
 @pytest.mark.core_agent_tests
 @pytest.mark.parametrize(
-    "node_name",
+    ("node_name", "resolver", "state", "expected"),
     [
-        "rolling_summary", "supervisor", "queue_dispatch", "jd_parser", "resume_matcher", "low_score_gate",
-        "prepare_low_score_review", "low_score_cancelled", "prepare_final_review", "final_review_gate",
-        "revision_dispatch", "finalize_node", "interview_simulator", "ask_question", "interview_await_answer",
-        "evaluate_answer", "interview_decision", "generate_review_report", "clarify_node", "out_of_scope_node",
+        ("rolling_summary", lambda _: "supervisor", {}, "supervisor"),
+        ("supervisor", resolve_route_node, {"route_decision": RouterDecision(route="clarify", confidence=1.0, reason="ok", task_queue=[])}, "clarify_node"),
+        ("queue_dispatch", _resolve_queue_dispatch_route, {"current_node": "jd_parse"}, "jd_parser"),
+        ("jd_parser", _resolve_jd_completion_route, {"error_log": []}, "prepare_review"),
+        ("resume_matcher", _resolve_match_result_route, {"match_result": type("Match", (), {"low_score_review_required": False})()}, "prepare_review"),
+        ("low_score_gate", _resolve_low_score_gate_route, {"review_status": "pending"}, "continue"),
+        ("prepare_low_score_review", lambda _: "low_score_gate", {}, "low_score_gate"),
+        ("low_score_cancelled", lambda _: "end", {}, "end"),
+        ("prepare_final_review", lambda _: "final_review_gate", {}, "final_review_gate"),
+        ("final_review_gate", _resolve_final_review_route, {"review_status": "approved"}, "approve"),
+        ("revision_dispatch", _resolve_revision_target_route, {"review_target": "match_result"}, "resume_matcher"),
+        ("finalize_node", _resolve_finalize_route, {"task_queue": []}, "end"),
+        ("interview_simulator", lambda _: "ask_question", {}, "ask_question"),
+        ("ask_question", lambda _: "interview_await_answer", {}, "interview_await_answer"),
+        ("interview_await_answer", _resolve_interview_resume_route, {"interview_state": InterviewState(status="waiting", target_question_count=1, current_question_id="q-1", question_records=[], user_context_updates=[], report=None, plan=[])}, "wait"),
+        ("evaluate_answer", lambda _: "interview_decision", {}, "interview_decision"),
+        ("interview_decision", _resolve_interview_decision_route, {"interview_next_action": "finish"}, "report"),
+        ("generate_review_report", lambda _: "prepare_final_review", {}, "prepare_final_review"),
+        ("clarify_node", lambda _: "end", {}, "end"),
+        ("out_of_scope_node", lambda _: "end", {}, "end"),
     ],
 )
-def test_error_guard_is_transparent_for_all_non_error_nodes(node_name: str) -> None:
-    """覆盖 20 个可被观察节点：无本节点终态错误时必须逐字保留原 resolver 结果。"""
+def test_error_guard_preserves_real_normal_route_for_all_non_error_nodes(
+    node_name: str, resolver: Any, state: dict[str, Any], expected: str
+) -> None:
+    """20 个节点以真实正常 State 跑原 resolver，guard 结果必须完全不变。"""
 
-    resolver = lambda _: "original-route"
-    state = {"error_log": [{"code": "UNHANDLED_NODE_EXCEPTION", "node": "other_node"}]}
-
-    assert _guard_route(node_name, resolver)(state) == "original-route"
+    assert resolver(state) == expected
+    assert _guard_route(node_name, resolver)(state) == expected
 
 
 @pytest.mark.core_agent_tests

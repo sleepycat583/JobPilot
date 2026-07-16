@@ -197,6 +197,7 @@ def observe_node(node_name: str, node_kind: str, function: Any, logger: logging.
 
         for entry in update.get("error_log", []):
             if isinstance(entry, dict):
+                _normalize_error_entry(entry)
                 _log_error(event_logger, entry, session_id, thread_id, node_kind, node_run_id, started_at, started_perf, input_summary)
         event_logger.info(build_log_event(event="agent_node_finished", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=True))
         return update
@@ -204,8 +205,16 @@ def observe_node(node_name: str, node_kind: str, function: Any, logger: logging.
     return wrapper
 
 
+def _normalize_error_entry(entry: dict[str, Any]) -> None:
+    """就地脱敏 ErrorEntry，使 State 与 JSONL 共用同一个安全对象。"""
+    for field_name in ("message", "raw_output_excerpt"):
+        value = entry.get(field_name)
+        if isinstance(value, str):
+            entry[field_name] = redact_text(value)
+
+
 def _log_error(logger: logging.Logger, entry: Mapping[str, Any], session_id: str, thread_id: str, node_kind: str, node_run_id: str, started_at: str, started_perf: float, input_summary: str) -> None:
-    logger.warning(build_log_event(event="agent_node_failed", session_id=session_id, thread_id=thread_id, node=str(entry["node"]), node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=False, error_code=str(entry["code"]), attempt=entry["attempt"], message=str(entry["message"]), raw_output_excerpt=entry.get("raw_output_excerpt")))
+    logger.warning(build_log_event(event="agent_node_failed", session_id=session_id, thread_id=thread_id, node=str(entry["node"]), node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=False, error_code=str(entry["code"]), attempt=entry["attempt"], message=str(entry["message"]), raw_output_excerpt=entry.get("raw_output_excerpt"), error_entry=entry))
 
 
 def _execution_error_event(node_name: str, entry: Mapping[str, Any]) -> dict[str, str]:

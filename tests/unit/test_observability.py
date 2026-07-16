@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from io import StringIO
 from pathlib import Path
 from time import sleep
 
@@ -113,7 +112,21 @@ def test_observer_double_writes_same_returned_error_entry_to_jsonl(tmp_path: Pat
     failed = next(event for event in events if event["event"] == "agent_node_failed")
 
     assert update["error_log"][0] is entry
+    assert failed["error_entry"] == entry
     assert {key: failed[key] for key in ("error_code", "attempt", "message", "node")} == {"error_code": entry["code"], "attempt": entry["attempt"], "message": entry["message"], "node": entry["node"]}
+
+
+def test_observer_normalizes_sensitive_error_entry_before_both_writes(tmp_path: Path) -> None:
+    logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.error-redaction", include_stdout=False)
+    entry = {"code": "LLM_SCHEMA_INVALID", "node": "jd_parser", "message": "Authorization: Bearer sk-sensitive", "retryable": True, "attempt": 1, "timestamp": "2026-01-01T00:00:00+00:00", "raw_output_excerpt": "邮箱 user@example.com"}
+    update = observe_node("jd_parser", "agent", lambda _: {"error_log": [entry]}, logger)({}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+    _flush(logger)
+    failed = next(json.loads(line) for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines() if 'agent_node_failed' in line)
+
+    assert "sk-sensitive" not in update["error_log"][0]["message"]
+    assert "user@example.com" not in update["error_log"][0]["raw_output_excerpt"]
+    assert failed["error_entry"] is not entry  # JSON round-trip creates a new Python object.
+    assert failed["error_entry"] == update["error_log"][0]
 
 
 def test_observer_persists_unhandled_exception_after_120ms(tmp_path: Path) -> None:

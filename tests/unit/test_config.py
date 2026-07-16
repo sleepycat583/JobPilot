@@ -58,6 +58,8 @@ def test_load_settings_succeeds_when_all_required_fields_exist(monkeypatch: pyte
     assert settings.api_key == "test-key"
     assert settings.chroma_persist_dir == "./data/chroma"
     assert settings.embedding_device == "cpu"
+    assert settings.log_dir == "./logs"
+    assert settings.log_level == "INFO"
 
 
 @pytest.mark.core_agent_tests

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     api_key: str
     chroma_persist_dir: str
     embedding_device: str
+    log_dir: str = "./logs"
+    log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
         "api_key",
         "chroma_persist_dir",
         "embedding_device",
+        "log_dir",
+        "log_level",
     )
     @classmethod
     def validate_not_blank(cls, value: str) -> str:
@@ -99,6 +103,8 @@ def run_startup_self_check(settings: Settings) -> None:
             "api_key",
             "chroma_persist_dir",
             "embedding_device",
+            "log_dir",
+            "log_level",
         )
         if not getattr(settings, field_name).strip()
     ]

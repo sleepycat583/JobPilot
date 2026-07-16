@@ -69,6 +69,8 @@ def test_event_ids_are_unique_and_node_run_id_links_lifecycle() -> None:
     [
         ("邮箱 user@example.com，手机号 13800138000", ["user@example.com", "13800138000"]),
         ("api_key=sk-secret-value; Bearer token=abc", ["sk-secret-value", "abc"]),
+        ("Authorization: Bearer sk-header-secret", ["sk-header-secret"]),
+        ("password=hunter2; secret=internal-value", ["hunter2", "internal-value"]),
     ],
 )
 def test_redact_text_removes_sensitive_values(raw: str, forbidden: list[str]) -> None:

@@ -27,6 +27,7 @@ _PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
 _SECRET_PATTERN = re.compile(
     r"(?i)\b(api[_-]?key|authorization|bearer\s+token|token|password|secret)\b\s*[:=]\s*([^\s,;]+)"
 )
+_AUTHORIZATION_BEARER_PATTERN = re.compile(r"(?i)\bauthorization\b\s*[:=]\s*bearer\s+([^\s,;]+)")
 
 
 class JsonLineFormatter(logging.Formatter):
@@ -141,6 +142,7 @@ def redact_text(value: str) -> str:
     """脱敏手机号、邮箱和常见凭证，并限制可能包含用户输入的文本长度。"""
     redacted = _EMAIL_PATTERN.sub("[REDACTED_EMAIL]", value)
     redacted = _PHONE_PATTERN.sub("[REDACTED_PHONE]", redacted)
+    redacted = _AUTHORIZATION_BEARER_PATTERN.sub("Authorization: Bearer [REDACTED_SECRET]", redacted)
     redacted = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED_SECRET]", redacted)
     if len(redacted) > MAX_REDACTED_TEXT_LENGTH:
         return f"{redacted[:MAX_REDACTED_TEXT_LENGTH]}...[TRUNCATED]"

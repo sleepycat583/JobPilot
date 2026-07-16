@@ -10,11 +10,14 @@ import json
 import logging
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
+
+from langgraph.errors import GraphInterrupt
 
 DEFAULT_LOG_DIR = "./logs"
 DEFAULT_LOG_LEVEL = "INFO"
@@ -157,6 +160,60 @@ def utc_now_iso() -> str:
 def new_node_run_id() -> str:
     """生成关联一次节点开始与终态日志的 UUIDv4。"""
     return str(uuid4())
+
+
+def observe_node(node_name: str, node_kind: str, function: Any, logger: logging.Logger | None = None, *, capture_exceptions: bool = True) -> Any:
+    """包装 Graph 节点，记录生命周期并将节点返回的 ErrorEntry 同源写入 JSONL。
+
+    未处理异常会转换为普通 State update，由 Builder 的错误守卫路由至 `error_node`；
+    `GraphInterrupt` 是 HITL 控制流，记录中断后必须原样传播。
+    """
+    event_logger = logger or configure_structured_logger()
+
+    def wrapper(state: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        configurable = (config or {}).get("configurable", {})
+        session_id = str(configurable.get("session_id", "session-unassigned"))
+        thread_id = str(configurable.get("thread_id", state.get("thread_id", "thread-unassigned")))
+        started_at = utc_now_iso()
+        started_perf = time.perf_counter()
+        node_run_id = new_node_run_id()
+        input_summary = build_safe_input_summary(state, node_name)
+        event_logger.info(build_log_event(event="agent_node_started", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, input_summary=input_summary, success=None))
+        try:
+            update = dict(function(state))
+        except GraphInterrupt:
+            event_logger.info(build_log_event(event="agent_node_interrupted", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=None))
+            raise
+        except Exception as exc:
+            if not capture_exceptions:
+                raise
+            entry = {
+                "code": "UNHANDLED_NODE_EXCEPTION", "node": node_name, "message": redact_text(str(exc)),
+                "retryable": False, "attempt": int(state.get("retry_count", {}).get(node_name, 0)),
+                "timestamp": utc_now_iso(), "raw_output_excerpt": None,
+            }
+            _log_error(event_logger, entry, session_id, thread_id, node_kind, node_run_id, started_at, started_perf, input_summary)
+            return {"current_node": node_name, "error_log": [entry], "execution_history": [_execution_error_event(node_name, entry)]}
+
+        for entry in update.get("error_log", []):
+            if isinstance(entry, dict):
+                _log_error(event_logger, entry, session_id, thread_id, node_kind, node_run_id, started_at, started_perf, input_summary)
+        event_logger.info(build_log_event(event="agent_node_finished", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=True))
+        return update
+
+    return wrapper
+
+
+def _log_error(logger: logging.Logger, entry: Mapping[str, Any], session_id: str, thread_id: str, node_kind: str, node_run_id: str, started_at: str, started_perf: float, input_summary: str) -> None:
+    logger.warning(build_log_event(event="agent_node_failed", session_id=session_id, thread_id=thread_id, node=str(entry["node"]), node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=False, error_code=str(entry["code"]), attempt=entry["attempt"], message=str(entry["message"]), raw_output_excerpt=entry.get("raw_output_excerpt")))
+
+
+def _execution_error_event(node_name: str, entry: Mapping[str, Any]) -> dict[str, str]:
+    return {"node": node_name, "event": "error", "timestamp": str(entry["timestamp"]), "detail": str(entry["code"])}
+
+
+def _elapsed_ms(started_perf: float) -> int:
+    return round((time.perf_counter() - started_perf) * 1000)
 
 
 def _close_handlers(logger: logging.Logger) -> None:

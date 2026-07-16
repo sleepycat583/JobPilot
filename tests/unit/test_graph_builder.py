@@ -1,6 +1,7 @@
 """Graph 最小拓扑测试。"""
 
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Any
 
 import pytest
@@ -10,7 +11,7 @@ from langgraph.types import Command
 
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
-from app.graph.builder import _resolve_interview_decision_route
+from app.graph.builder import _guard_route, _resolve_interview_decision_route
 from app.agents.interview_simulator import _assert_question_records_unchanged, interview_decision_node
 from app.schemas.interview import InterviewState, InterviewTopicPlan, QuestionRecord
 from app.schemas.jd import JDParsed, SkillRequirement
@@ -26,6 +27,8 @@ class FakeChatModel:
         self.prompts.append(prompt)
         response = self.responses[self.invoke_calls] if self.invoke_calls < len(self.responses) else self._interview_response(prompt)
         self.invoke_calls += 1
+        if isinstance(response, Exception):
+            raise response
         return response
 
     def bind(self, **_: Any) -> "FakeChatModel":
@@ -96,6 +99,60 @@ def _build_llm_analysis(responsibility_relevance: float) -> str:
         '"evidence":[{"chunk_id":"exp-1","quote":"3 years"}]}],'
         '"strengths":["strong"],"gaps":[],"recommendations":[]}'
     )
+
+
+@pytest.mark.core_agent_tests
+@pytest.mark.parametrize(
+    "node_name",
+    [
+        "rolling_summary", "supervisor", "queue_dispatch", "jd_parser", "resume_matcher", "low_score_gate",
+        "prepare_low_score_review", "low_score_cancelled", "prepare_final_review", "final_review_gate",
+        "revision_dispatch", "finalize_node", "interview_simulator", "ask_question", "interview_await_answer",
+        "evaluate_answer", "interview_decision", "generate_review_report", "clarify_node", "out_of_scope_node",
+    ],
+)
+def test_error_guard_is_transparent_for_all_non_error_nodes(node_name: str) -> None:
+    """覆盖 20 个可被观察节点：无本节点终态错误时必须逐字保留原 resolver 结果。"""
+
+    resolver = lambda _: "original-route"
+    state = {"error_log": [{"code": "UNHANDLED_NODE_EXCEPTION", "node": "other_node"}]}
+
+    assert _guard_route(node_name, resolver)(state) == "original-route"
+
+
+@pytest.mark.core_agent_tests
+def test_error_guard_routes_only_matching_latest_unhandled_error_to_error_node() -> None:
+    state = {"error_log": [{"code": "UNHANDLED_NODE_EXCEPTION", "node": "jd_parser"}]}
+
+    assert _guard_route("jd_parser", lambda _: "prepare_review")(state) == "error"
+
+
+@pytest.mark.core_agent_tests
+def test_unhandled_supervisor_exception_persists_then_enters_error_node_without_worker() -> None:
+    """120ms 终态异常必须先持久化，再阻断原有 queue_dispatch/Worker 正常路径。"""
+
+    class DelayedFailure(RuntimeError):
+        pass
+
+    model = FakeChatModel([DelayedFailure("unhandled supervisor failure")])
+    original_invoke = model.invoke
+
+    def delayed_invoke(prompt: str) -> Any:
+        sleep(0.12)
+        return original_invoke(prompt)
+
+    model.invoke = delayed_invoke  # type: ignore[method-assign]
+    graph = build_graph(model)
+
+    result = graph.invoke({"user_input": "分析这个岗位"})
+
+    assert result["current_node"] == "error_node"
+    assert result["error_log"][-1]["code"] == "UNHANDLED_NODE_EXCEPTION"
+    assert result["error_log"][-1]["node"] == "supervisor"
+    assert result["execution_history"][-1]["event"] == "error"
+    assert not {"queue_dispatch", "jd_parser", "resume_matcher", "interview_simulator"} & {
+        event["node"] for event in result["execution_history"]
+    }
 
 
 def _build_graph_for_resume_match(score: float) -> Any:

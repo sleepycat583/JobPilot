@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+from io import StringIO
 from pathlib import Path
+from time import sleep
 
 import pytest
+from langgraph.errors import GraphInterrupt
 
 from app.services.observability import (
     LOG_FILE_NAME,
@@ -16,6 +19,7 @@ from app.services.observability import (
     build_safe_input_summary,
     configure_structured_logger,
     new_node_run_id,
+    observe_node,
     redact_text,
 )
 
@@ -96,6 +100,52 @@ def test_safe_input_summary_contains_only_metadata() -> None:
     assert "完整简历" not in summary
     assert "user_input_length=13" in summary
     assert "resume_version=resume-v1" in summary
+
+
+def test_observer_double_writes_same_returned_error_entry_to_jsonl(tmp_path: Path) -> None:
+    logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.double-write", include_stdout=False)
+    entry = {"code": "INPUT_EMPTY", "node": "supervisor", "message": "empty", "retryable": False, "attempt": 0, "timestamp": "2026-01-01T00:00:00+00:00", "raw_output_excerpt": None}
+    wrapped = observe_node("supervisor", "agent", lambda _: {"error_log": [entry]}, logger)
+
+    update = wrapped({"user_input": ""}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+    _flush(logger)
+    events = [json.loads(line) for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
+    failed = next(event for event in events if event["event"] == "agent_node_failed")
+
+    assert update["error_log"][0] is entry
+    assert {key: failed[key] for key in ("error_code", "attempt", "message", "node")} == {"error_code": entry["code"], "attempt": entry["attempt"], "message": entry["message"], "node": entry["node"]}
+
+
+def test_observer_persists_unhandled_exception_after_120ms(tmp_path: Path) -> None:
+    logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.unhandled", include_stdout=False)
+
+    def raise_unhandled(_: object) -> dict[str, object]:
+        sleep(0.12)
+        raise RuntimeError("unhandled test failure")
+
+    update = observe_node("jd_parser", "agent", raise_unhandled, logger)({}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+    _flush(logger)
+    events = [json.loads(line) for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
+    failed = next(event for event in events if event["event"] == "agent_node_failed")
+
+    assert update["error_log"][0]["code"] == "UNHANDLED_NODE_EXCEPTION"
+    assert update["execution_history"][0]["event"] == "error"
+    assert failed["error_code"] == update["error_log"][0]["code"]
+    assert failed["duration_ms"] >= 120
+
+
+def test_observer_preserves_graph_interrupt_without_error_entry(tmp_path: Path) -> None:
+    logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.interrupt", include_stdout=False)
+
+    def interrupt(_: object) -> dict[str, object]:
+        raise GraphInterrupt()
+
+    with pytest.raises(GraphInterrupt):
+        observe_node("interview_await_answer", "control", interrupt, logger)({}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+    _flush(logger)
+    events = [json.loads(line) for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
+
+    assert [event["event"] for event in events] == ["agent_node_started", "agent_node_interrupted"]
 
 
 def _flush(logger: logging.Logger) -> None:

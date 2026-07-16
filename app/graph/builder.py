@@ -41,6 +41,7 @@ from app.graph.control_nodes import (
 from app.graph.routing import resolve_route_node
 from app.rag.chroma_store import ChromaResumeStore
 from app.schemas.state import ExecutionEvent, JobAssistantState
+from app.services.observability import configure_structured_logger, observe_node
 from app.tools.company_search import SearchBackend
 
 
@@ -59,6 +60,11 @@ def build_graph(
     """
 
     graph = StateGraph(JobAssistantState)
+    observer_logger = configure_structured_logger()
+
+    def add_observed_node(name: str, node_kind: str, function: Any, *, capture_exceptions: bool = True) -> None:
+        """统一注册观察过的节点，避免遗漏 Graph 生命周期日志。"""
+        graph.add_node(name, observe_node(name, node_kind, function, observer_logger, capture_exceptions=capture_exceptions))
 
     def supervisor_with_model(state: JobAssistantState) -> dict[str, object]:
         return supervisor_node(state, chat_model)
@@ -83,18 +89,18 @@ def build_graph(
             return update
         return {**update, "review_status": "pending", "review_target": "match_result", "review_feedback": None}
 
-    graph.add_node("rolling_summary", rolling_summary_with_model)
-    graph.add_node("supervisor", supervisor_with_model)
-    graph.add_node("queue_dispatch", queue_dispatch_node)
-    graph.add_node("jd_parser", jd_parser_with_dependencies)
-    graph.add_node("resume_matcher", resume_matcher_with_dependencies)
-    graph.add_node("low_score_gate", low_score_gate_node)
-    graph.add_node("prepare_low_score_review", prepare_low_score_review_node)
-    graph.add_node("low_score_cancelled", low_score_cancelled_node)
-    graph.add_node("prepare_final_review", prepare_final_review_node)
-    graph.add_node("final_review_gate", final_review_gate_node)
-    graph.add_node("revision_dispatch", revision_dispatch_node)
-    graph.add_node("finalize_node", finalize_node)
+    add_observed_node("rolling_summary", "control", rolling_summary_with_model)
+    add_observed_node("supervisor", "agent", supervisor_with_model)
+    add_observed_node("queue_dispatch", "control", queue_dispatch_node)
+    add_observed_node("jd_parser", "agent", jd_parser_with_dependencies)
+    add_observed_node("resume_matcher", "agent", resume_matcher_with_dependencies)
+    add_observed_node("low_score_gate", "control", low_score_gate_node)
+    add_observed_node("prepare_low_score_review", "control", prepare_low_score_review_node)
+    add_observed_node("low_score_cancelled", "control", low_score_cancelled_node)
+    add_observed_node("prepare_final_review", "control", prepare_final_review_node)
+    add_observed_node("final_review_gate", "control", final_review_gate_node)
+    add_observed_node("revision_dispatch", "control", revision_dispatch_node)
+    add_observed_node("finalize_node", "control", finalize_node)
     def interview_plan_with_model(state: JobAssistantState) -> dict[str, object]:
         return interview_plan_node(state, chat_model)
 
@@ -107,22 +113,23 @@ def build_graph(
     def generate_report_with_model(state: JobAssistantState) -> dict[str, object]:
         return generate_review_report_node(state, chat_model)
 
-    graph.add_node("interview_simulator", interview_plan_with_model)
-    graph.add_node("ask_question", ask_question_with_model)
-    graph.add_node("interview_await_answer", interview_await_answer_node)
-    graph.add_node("evaluate_answer", evaluate_answer_with_model)
-    graph.add_node("interview_decision", interview_decision_node)
-    graph.add_node("generate_review_report", generate_report_with_model)
-    graph.add_node("clarify_node", clarify_node)
-    graph.add_node("out_of_scope_node", out_of_scope_node)
-    graph.add_node("error_node", error_node)
+    add_observed_node("interview_simulator", "agent", interview_plan_with_model)
+    add_observed_node("ask_question", "agent", ask_question_with_model)
+    add_observed_node("interview_await_answer", "control", interview_await_answer_node)
+    add_observed_node("evaluate_answer", "agent", evaluate_answer_with_model)
+    add_observed_node("interview_decision", "control", interview_decision_node)
+    add_observed_node("generate_review_report", "agent", generate_report_with_model)
+    add_observed_node("clarify_node", "control", clarify_node)
+    add_observed_node("out_of_scope_node", "control", out_of_scope_node)
+    # 最后防线自身不转换异常，避免任何未来缺陷回写后再次路由至自身形成循环。
+    add_observed_node("error_node", "control", error_node, capture_exceptions=False)
 
     graph.set_entry_point("rolling_summary")
-    graph.add_edge("rolling_summary", "supervisor")
+    _add_guarded_edge(graph, "rolling_summary", "supervisor")
 
     graph.add_conditional_edges(
         "supervisor",
-        resolve_route_node,
+        _guard_route("supervisor", resolve_route_node),
         {
             "jd_parser": "queue_dispatch",
             "resume_matcher": "queue_dispatch",
@@ -130,12 +137,13 @@ def build_graph(
             "clarify_node": "clarify_node",
             "out_of_scope_node": "out_of_scope_node",
             "error_node": "error_node",
+            "error": "error_node",
         },
     )
 
     graph.add_conditional_edges(
         "queue_dispatch",
-        _resolve_queue_dispatch_route,
+        _guard_route("queue_dispatch", _resolve_queue_dispatch_route),
         {
             "jd_parser": "jd_parser",
             "resume_matcher": "resume_matcher",
@@ -146,18 +154,18 @@ def build_graph(
     )
     graph.add_conditional_edges(
         "jd_parser",
-        _resolve_jd_completion_route,
+        _guard_route("jd_parser", _resolve_jd_completion_route),
         {"prepare_review": "prepare_final_review", "error": "error_node"},
     )
-    graph.add_edge("prepare_final_review", "final_review_gate")
+    _add_guarded_edge(graph, "prepare_final_review", "final_review_gate")
     graph.add_conditional_edges(
         "final_review_gate",
-        _resolve_final_review_route,
-        {"approve": "finalize_node", "reject": "revision_dispatch"},
+        _guard_route("final_review_gate", _resolve_final_review_route),
+        {"approve": "finalize_node", "reject": "revision_dispatch", "error": "error_node"},
     )
     graph.add_conditional_edges(
         "revision_dispatch",
-        _resolve_revision_target_route,
+        _guard_route("revision_dispatch", _resolve_revision_target_route),
         {
             "queue_dispatch": "queue_dispatch",
             "jd_parser": "jd_parser",
@@ -168,44 +176,66 @@ def build_graph(
     )
     graph.add_conditional_edges(
         "resume_matcher",
-        _resolve_match_result_route,
-        {"low_score": "prepare_low_score_review", "prepare_review": "prepare_final_review"},
+        _guard_route("resume_matcher", _resolve_match_result_route),
+        {"low_score": "prepare_low_score_review", "prepare_review": "prepare_final_review", "error": "error_node"},
     )
-    graph.add_edge("prepare_low_score_review", "low_score_gate")
+    _add_guarded_edge(graph, "prepare_low_score_review", "low_score_gate")
     graph.add_conditional_edges(
         "low_score_gate",
-        _resolve_low_score_gate_route,
+        _guard_route("low_score_gate", _resolve_low_score_gate_route),
         {
             "continue": "prepare_final_review",
             "cancel": "low_score_cancelled",
             "revise": "revision_dispatch",
+            "error": "error_node",
         },
     )
     graph.add_conditional_edges(
         "finalize_node",
-        _resolve_finalize_route,
-        {"continue": "queue_dispatch", "end": END},
+        _guard_route("finalize_node", _resolve_finalize_route),
+        {"continue": "queue_dispatch", "end": END, "error": "error_node"},
     )
-    graph.add_edge("low_score_cancelled", END)
-    graph.add_edge("interview_simulator", "ask_question")
-    graph.add_edge("ask_question", "interview_await_answer")
+    _add_guarded_edge(graph, "low_score_cancelled", END)
+    _add_guarded_edge(graph, "interview_simulator", "ask_question")
+    _add_guarded_edge(graph, "ask_question", "interview_await_answer")
     graph.add_conditional_edges(
         "interview_await_answer",
-        _resolve_interview_resume_route,
-        {"wait": "interview_await_answer", "evaluate": "evaluate_answer", "report": "generate_review_report"},
+        _guard_route("interview_await_answer", _resolve_interview_resume_route),
+        {"wait": "interview_await_answer", "evaluate": "evaluate_answer", "report": "generate_review_report", "error": "error_node"},
     )
-    graph.add_edge("evaluate_answer", "interview_decision")
+    _add_guarded_edge(graph, "evaluate_answer", "interview_decision")
     graph.add_conditional_edges(
         "interview_decision",
-        _resolve_interview_decision_route,
-        {"ask": "ask_question", "report": "generate_review_report"},
+        _guard_route("interview_decision", _resolve_interview_decision_route),
+        {"ask": "ask_question", "report": "generate_review_report", "error": "error_node"},
     )
-    graph.add_edge("generate_review_report", "prepare_final_review")
-    graph.add_edge("clarify_node", END)
-    graph.add_edge("out_of_scope_node", END)
+    _add_guarded_edge(graph, "generate_review_report", "prepare_final_review")
+    _add_guarded_edge(graph, "clarify_node", END)
+    _add_guarded_edge(graph, "out_of_scope_node", END)
     graph.add_edge("error_node", END)
 
     return graph.compile(checkpointer=checkpointer)
+
+
+def _add_guarded_edge(graph: StateGraph, source: str, target: str) -> None:
+    """将原静态边改为二选一路由，终态未处理异常优先进入既有 error_node。"""
+    graph.add_conditional_edges(
+        source,
+        _guard_route(source, lambda _: "normal"),
+        {"normal": target, "error": "error_node"},
+    )
+
+
+def _guard_route(node_name: str, resolver: Any) -> Any:
+    """在保留原 resolver 结果前，检查本节点刚写入的终态异常。"""
+    def guarded(state: JobAssistantState) -> str:
+        errors = state.get("error_log", [])
+        latest_error = errors[-1] if errors else None
+        if isinstance(latest_error, dict) and latest_error.get("code") == "UNHANDLED_NODE_EXCEPTION" and latest_error.get("node") == node_name:
+            return "error"
+        return resolver(state)
+
+    return guarded
 
 
 def resume_matcher_placeholder(_: JobAssistantState) -> dict[str, object]:

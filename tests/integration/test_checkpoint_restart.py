@@ -247,7 +247,10 @@ def _run_rolling_summary_child(checkpoint_path: Path, thread_id: str, phase: str
 
 
 def _run_combined_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
-    """在独立进程执行或恢复 JD+匹配组合图。"""
+    """在独立进程执行或恢复 JD+匹配组合图。
+
+    子进程 stdout 前序是 JSONL 节点日志，约定最后一行才是本夹具打印的结果 JSON。
+    """
 
     completed = subprocess.run(
         [sys.executable, "-c", COMBINED_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
@@ -256,11 +259,11 @@ def _run_combined_child(checkpoint_path: Path, thread_id: str, phase: str) -> di
         text=True,
         encoding="utf-8",
     )
-    return json.loads(completed.stdout)
+    return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
 def _run_interview_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, object]:
-    """在独立进程执行或恢复面试 HITL 骨架。"""
+    """在独立进程执行或恢复面试 HITL 骨架，最后一行读取夹具结果 JSON。"""
 
     completed = subprocess.run(
         [sys.executable, "-c", INTERVIEW_CHILD_PROGRAM, str(checkpoint_path), thread_id, phase],
@@ -270,7 +273,7 @@ def _run_interview_child(checkpoint_path: Path, thread_id: str, phase: str) -> d
         encoding="utf-8",
         errors="replace",
     )
-    return json.loads(completed.stdout)
+    return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
 @pytest.mark.core_agent_tests

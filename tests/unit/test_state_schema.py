@@ -5,6 +5,7 @@ from typing import get_type_hints
 
 import pytest
 
+from app.schemas.resume import MatchUnavailableResult
 from app.schemas.state import ErrorEntry, ExecutionEvent, JobAssistantState
 
 
@@ -80,3 +81,13 @@ def test_state_can_hold_independent_business_fields() -> None:
     assert "jd_parsed" in state
     assert "match_result" in state
     assert "interview_state" in state
+
+
+@pytest.mark.core_agent_tests
+def test_state_match_result_annotation_accepts_unavailable_result() -> None:
+    result = MatchUnavailableResult(
+        status="MATCH_UNAVAILABLE", resume_version="v1", retrieval_evidence=[], message="请人工核可"
+    )
+    state: JobAssistantState = {"match_result": result}
+
+    assert state["match_result"].status == "MATCH_UNAVAILABLE"

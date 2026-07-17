@@ -10,7 +10,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from app.schemas.interview import InterviewState
 from app.schemas.jd import JDParsed
-from app.schemas.resume import MatchResult
+from app.schemas.resume import MatchResult, MatchUnavailableResult
 from app.schemas.router import RouterDecision
 from app.schemas.review import ReviewStatus
 
@@ -64,7 +64,7 @@ class JobAssistantState(TypedDict, total=False):
     task_queue: list[str]
 
     jd_parsed: JDParsed | None
-    match_result: MatchResult | None
+    match_result: MatchResult | MatchUnavailableResult | None
     interview_state: InterviewState | None
     interview_next_action: str | None
     interview_follow_up_of: str | None

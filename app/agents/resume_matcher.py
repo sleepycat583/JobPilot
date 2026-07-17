@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.rag.chroma_store import ChromaQueryResult, ChromaResumeStore, ResumeVersionNotFoundError
 from app.graph.review_helpers import next_match_business_attempt
 from app.schemas.jd import JDParsed, SkillRequirement
-from app.schemas.resume import EvidenceRef, MatchItem, MatchResult
+from app.schemas.resume import EvidenceRef, MatchItem, MatchResult, MatchUnavailableResult, UnavailableEvidenceItem
 from app.schemas.state import ErrorEntry, ExecutionEvent, ExecutionEventMetadata, JobAssistantState
 from app.services.match_scoring import (
     ConstraintStatus,
@@ -31,6 +31,7 @@ from app.services.structured_output import StructuredPromptContext, call_with_st
 RAG_EMPTY_RESULT_CODE = "RAG_EMPTY_RESULT"
 RAG_EMPTY_RESULT_GAP = "未从简历中检索到与岗位要求匹配的有效证据，当前匹配结果需人工确认"
 RESUME_VERSION_NOT_FOUND_CODE = "RESUME_VERSION_NOT_FOUND"
+MATCH_UNAVAILABLE_CODE = "MATCH_UNAVAILABLE"
 
 
 class LLMEvidenceRef(BaseModel):
@@ -134,10 +135,26 @@ def resume_matcher_node(
     )
 
     error_log = list(structured_result.error_log)
+    if structured_result.degraded:
+        error_log.append(
+            _build_error_entry(
+                code=MATCH_UNAVAILABLE_CODE,
+                message="Resume match analysis was unavailable after all structured-output retries",
+                retryable=False,
+                attempt=structured_result.retry_count,
+            )
+        )
+        return {
+            "match_result": _build_match_unavailable_result(resume_version, retrieval_context),
+            "current_node": current_node,
+            "retry_count": {current_node: structured_result.retry_count},
+            "error_log": error_log,
+            "execution_history": [_build_event(current_node, "success", "match_unavailable")],
+        }
+
     if structured_result.value is None:
-        analysis = _build_degraded_analysis(jd_parsed)
-    else:
-        analysis = structured_result.value
+        raise ValueError("structured output returned neither a value nor a degraded result")
+    analysis = structured_result.value
 
     normalized = _normalize_analysis(analysis, retrieval_context)
     score_breakdown = calculate_match_score(
@@ -265,31 +282,22 @@ def _build_minimal_prompt(
     )
 
 
-def _build_degraded_analysis(jd_parsed: JDParsed) -> LLMMatchAnalysis:
-    """构造 LLM 结构化失败后的最小匹配结果。"""
+def _build_match_unavailable_result(
+    resume_version: str,
+    retrieval_context: dict[str, list[dict[str, Any]]],
+) -> MatchUnavailableResult:
+    """把评分前已获取的检索证据保留为无分数的人工核可草稿。"""
 
-    return LLMMatchAnalysis(
-        must_items=[
-            LLMMatchItem(requirement=skill.name, status="missing", rationale="structured output degraded", evidence=[])
-            for skill in jd_parsed.skills
-            if skill.priority == "must"
-        ],
-        responsibility_items=[
-            LLMMatchItem(requirement=item, status="missing", rationale="structured output degraded", evidence=[])
-            for item in jd_parsed.responsibilities
-        ],
-        preferred_items=[
-            LLMMatchItem(requirement=skill.name, status="missing", rationale="structured output degraded", evidence=[])
-            for skill in jd_parsed.skills
-            if skill.priority == "preferred"
-        ],
-        constraint_items=[
-            LLMConstraintItem(requirement=item, status="missing", rationale="structured output degraded", evidence=[])
-            for item in jd_parsed.experience_requirements + jd_parsed.education_requirements
-        ],
-        strengths=[],
-        gaps=["LLM_SCHEMA_INVALID"],
-        recommendations=["请人工复核简历匹配结论"],
+    evidence_items = [
+        UnavailableEvidenceItem(requirement=str(item["requirement"]), evidence=list(item["evidence"]))
+        for group in retrieval_context.values()
+        for item in group
+    ]
+    return MatchUnavailableResult(
+        status="MATCH_UNAVAILABLE",
+        resume_version=resume_version,
+        retrieval_evidence=evidence_items,
+        message="结构化匹配分析连续失败，未生成匹配分数；请人工检查检索证据后再核可。",
     )
 
 

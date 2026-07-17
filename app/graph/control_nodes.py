@@ -202,6 +202,7 @@ def low_score_gate_node(state: JobAssistantState) -> dict[str, object]:
     """
 
     match_result = state.get("match_result")
+    # 依赖 MatchUnavailableResult 不含 low_score_review_required；若未来增加同名字段，必须重新检查此守卫。
     low_score_review_required = bool(getattr(match_result, "low_score_review_required", False))
     if low_score_review_required and state.get("review_status") == "in_review":
         payload = LowScoreInterruptPayload(

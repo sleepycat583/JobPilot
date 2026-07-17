@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.resume import EvidenceRef, MatchItem, MatchResult
+from app.schemas.resume import EvidenceRef, MatchItem, MatchResult, MatchUnavailableResult
 
 
 @pytest.mark.core_agent_tests
@@ -43,3 +43,18 @@ def test_match_result_accepts_unbounded_match_item_score() -> None:
     )
 
     assert item.score == 999.0
+
+
+@pytest.mark.core_agent_tests
+def test_match_unavailable_result_keeps_evidence_without_score_fields() -> None:
+    result = MatchUnavailableResult.model_validate(
+        {
+            "status": "MATCH_UNAVAILABLE",
+            "resume_version": "v1",
+            "retrieval_evidence": [{"requirement": "Python", "evidence": [{"chunk_id": "c1", "quote": "Python 项目", "relevance": 0.9}]}],
+            "message": "请人工核可",
+        }
+    )
+
+    assert result.retrieval_evidence[0].evidence[0].chunk_id == "c1"
+    assert "total_score" not in result.model_dump()

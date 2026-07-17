@@ -28,6 +28,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.schemas.state import ErrorEntry
+from app.services.observability import redact_text
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 MAX_EXCERPT_LENGTH = 500
@@ -188,7 +189,7 @@ def _build_error_entry(
     return ErrorEntry(
         code="LLM_SCHEMA_INVALID",
         node=node_name,
-        message=message,
+        message=redact_text(message),
         retryable=retryable,
         attempt=attempt,
         timestamp=_utc_now_iso(),
@@ -197,11 +198,12 @@ def _build_error_entry(
 
 
 def _safe_excerpt(raw_output: str | None) -> str | None:
-    """截断原始输出，避免错误日志失控。"""
+    """脱敏并截断原始输出，避免错误日志泄露或失控。"""
 
     if raw_output is None:
         return None
-    return raw_output[:MAX_EXCERPT_LENGTH]
+    # 先脱敏再限制总长度，避免截断前后的片段都进入 State 或日志。
+    return redact_text(raw_output)[:MAX_EXCERPT_LENGTH]
 
 
 def _utc_now_iso() -> str:

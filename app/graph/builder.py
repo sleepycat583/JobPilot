@@ -308,6 +308,7 @@ def _resolve_match_result_route(state: JobAssistantState) -> str:
     """低分先进入确认 Gate，其余匹配结果直接等待最终核可。"""
 
     match_result = state.get("match_result")
+    # 依赖 MatchUnavailableResult 不含 low_score_review_required；若未来增加同名字段，必须重新检查此路由。
     return "low_score" if bool(getattr(match_result, "low_score_review_required", False)) else "prepare_review"
 
 

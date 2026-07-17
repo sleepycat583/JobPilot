@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agents.resume_matcher import RAG_EMPTY_RESULT_CODE, RAG_EMPTY_RESULT_GAP, resume_matcher_node
+from app.agents.resume_matcher import MATCH_UNAVAILABLE_CODE, RAG_EMPTY_RESULT_CODE, RAG_EMPTY_RESULT_GAP, resume_matcher_node
 from app.rag.chroma_store import ResumeVersionNotFoundError
 from app.schemas.jd import JDParsed, SkillRequirement
+from app.schemas.resume import MatchUnavailableResult
 
 
 @dataclass
@@ -165,6 +166,47 @@ def test_resume_matcher_returns_resume_version_not_found_without_fallback() -> N
     assert result["execution_history"][0]["detail"] == "resume_version_not_found"
     assert model.invoke_calls == 0
     assert all(version == "missing-v1" for _, version in store.calls)
+
+
+def test_resume_matcher_returns_unscored_evidence_when_structured_output_retries_exhausted() -> None:
+    store = FakeResumeStore(
+        {
+            ("Java", "2026-07-v1"): [
+                {"chunk_id": "project-java", "quote": "主导 Java 微服务开发。", "relevance": 0.93}
+            ]
+        }
+    )
+    model = FakeChatModel(
+        [
+            "Authorization: Bearer sk-sensitive user@example.com " + "x" * 600,
+            "still-not-json",
+            "bad-output",
+        ]
+    )
+
+    result = resume_matcher_node(
+        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1"},
+        model,
+        store,
+    )
+    match_result = result["match_result"]
+
+    assert model.invoke_calls == 3
+    assert isinstance(match_result, MatchUnavailableResult)
+    assert match_result.status == "MATCH_UNAVAILABLE"
+    assert not hasattr(match_result, "total_score")
+    java_evidence = next(item for item in match_result.retrieval_evidence if item.requirement == "Java")
+    assert java_evidence.evidence[0].chunk_id == "project-java"
+    assert any(entry["code"] == MATCH_UNAVAILABLE_CODE for entry in result["error_log"])
+    unavailable_entry = next(entry for entry in result["error_log"] if entry["code"] == MATCH_UNAVAILABLE_CODE)
+    assert unavailable_entry["attempt"] == 2
+    assert unavailable_entry["retryable"] is False
+    first_excerpt = result["error_log"][0]["raw_output_excerpt"]
+    assert first_excerpt is not None
+    assert "sk-sensitive" not in first_excerpt
+    assert "user@example.com" not in first_excerpt
+    assert len(first_excerpt) <= 500
+    assert result["execution_history"][0]["detail"] == "match_unavailable"
 
 
 def test_resume_matcher_writes_only_match_result_business_field() -> None:

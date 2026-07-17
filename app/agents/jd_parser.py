@@ -64,7 +64,7 @@ def jd_parser_node(
                     attempt=result.retry_count,
                 )
             ],
-            "execution_history": [_build_event("jd_parser", "success", "technical_degraded")],
+            "execution_history": [_build_event("jd_parser", "success", "technical_degraded_manual_review_required")],
         }
 
     gated = _apply_guardrails(result.value, jd_input.jd_text)
@@ -193,10 +193,14 @@ def _has_meaningful_requirements(parsed: JDParsed) -> bool:
 
 
 def _build_technical_degraded_result(jd_input: JDParseInput) -> JDParsed:
-    """构造结构化抽取连续失败后的最小 JDParsed。"""
+    """构造结构化抽取连续失败后的最小 JDParsed。
+
+    只保留可由原文固定标记直接确认的岗位名称；技能、职责等需要语义判断的
+    字段一律留空，避免将猜测当作结构化事实传入下游。
+    """
 
     return JDParsed(
-        job_title="unknown",
+        job_title=_extract_explicit_job_title(jd_input.jd_text),
         seniority="unknown",
         company_name=None,
         responsibilities=[],
@@ -206,10 +210,25 @@ def _build_technical_degraded_result(jd_input: JDParseInput) -> JDParsed:
         interview_focus=[],
         company_context=[],
         ambiguities=[
-            f"{EXTRACTION_UNAVAILABLE_CODE}: 结构化抽取连续失败，当前结果不能用于判断JD是否包含有效要求"
+            f"{EXTRACTION_UNAVAILABLE_CODE}: 结构化抽取连续失败；未能可靠确认的字段已留空，必须人工核可"
         ],
         source_language=jd_input.language,
     )
+
+
+def _extract_explicit_job_title(jd_text: str) -> str:
+    """从显式“岗位/职位”标记提取标题，未命中时返回 unknown。
+
+    不使用模型或宽泛关键词猜测，确保重试耗尽时仅保留可定位的原文事实。
+    """
+
+    for marker in ("岗位：", "职位：", "岗位:", "职位:"):
+        if marker not in jd_text:
+            continue
+        candidate = jd_text.split(marker, 1)[1].splitlines()[0].strip(" ，。；;：:")
+        if candidate:
+            return candidate[:80]
+    return "unknown"
 
 
 def _is_content_insufficient(parsed: JDParsed) -> bool:

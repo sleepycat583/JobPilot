@@ -122,13 +122,14 @@ def test_jd_parser_does_not_fabricate_skills_for_content_insufficient_jd() -> No
 
 
 def test_jd_parser_marks_technical_degradation_separately_from_content_insufficient() -> None:
-    jd_text = "字节跳动后端岗位，要求熟悉 Python、FastAPI，3年以上后端开发经验，负责接口设计与性能优化。"
-    model = FakeChatModel(["not-json", "still-not-json", "bad-output"])
+    jd_text = "职位：后端工程师\n要求熟悉 Python、FastAPI，3年以上后端开发经验，负责接口设计与性能优化。"
+    model = FakeChatModel(["Authorization: Bearer sk-sensitive user@example.com " + "x" * 600, "still-not-json", "bad-output"])
 
     result = jd_parser_node({"user_input": jd_text}, model)
     jd_parsed = result["jd_parsed"]
 
     assert model.invoke_calls == 3
+    assert jd_parsed.job_title == "后端工程师"
     assert jd_parsed.skills == []
     assert any(item.startswith(f"{EXTRACTION_UNAVAILABLE_CODE}:") for item in jd_parsed.ambiguities)
     assert not any(item.startswith(f"{CONTENT_INSUFFICIENT_CODE}:") for item in jd_parsed.ambiguities)
@@ -137,7 +138,13 @@ def test_jd_parser_marks_technical_degradation_separately_from_content_insuffici
     assert all(entry["code"] == "LLM_SCHEMA_INVALID" for entry in result["error_log"][:-1])
     assert result["error_log"][-1]["retryable"] is False
     assert result["retry_count"] == {"jd_parser": 2}
-    assert result["execution_history"][0]["detail"] == "technical_degraded"
+    assert result["execution_history"][0]["detail"] == "technical_degraded_manual_review_required"
+    assert "必须人工核可" in jd_parsed.ambiguities[0]
+    first_excerpt = result["error_log"][0]["raw_output_excerpt"]
+    assert first_excerpt is not None
+    assert "sk-sensitive" not in first_excerpt
+    assert "user@example.com" not in first_excerpt
+    assert len(first_excerpt) <= 500
 
 
 def test_jd_parser_writes_only_jd_business_field() -> None:

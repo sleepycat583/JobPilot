@@ -27,7 +27,9 @@ from app.graph.routing import resolve_route_node
 from app.agents.interview_simulator import _assert_question_records_unchanged, interview_decision_node
 from app.schemas.interview import InterviewState, InterviewTopicPlan, QuestionRecord
 from app.schemas.jd import JDParsed, SkillRequirement
+from app.schemas.resume import MatchUnavailableResult
 from app.schemas.router import RouterDecision
+from app.graph.control_nodes import finalize_node
 
 
 @dataclass
@@ -154,6 +156,29 @@ def test_error_guard_routes_only_matching_latest_unhandled_error_to_error_node()
     state = {"error_log": [{"code": "UNHANDLED_NODE_EXCEPTION", "node": "jd_parser"}]}
 
     assert _guard_route("jd_parser", lambda _: "prepare_review")(state) == "error"
+
+
+@pytest.mark.core_agent_tests
+def test_match_unavailable_routes_to_final_review_and_finalizes_serializable_draft() -> None:
+    unavailable = MatchUnavailableResult(
+        status="MATCH_UNAVAILABLE",
+        resume_version="v1",
+        retrieval_evidence=[],
+        message="请人工检查检索证据",
+    )
+
+    assert _resolve_match_result_route({"match_result": unavailable}) == "prepare_review"
+    update = finalize_node(
+        {
+            "match_result": unavailable,
+            "review_status": "approved",
+            "review_target": "match_result",
+            "task_queue": [],
+        }
+    )
+
+    assert update["final_output"]["content"]["status"] == "MATCH_UNAVAILABLE"
+    assert "total_score" not in update["final_output"]["content"]
 
 
 @pytest.mark.core_agent_tests

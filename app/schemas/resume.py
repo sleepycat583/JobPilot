@@ -43,3 +43,27 @@ class MatchResult(BaseModel):
     recommendations: list[str]
     low_score_review_required: bool
     resume_version: str
+
+
+class UnavailableEvidenceItem(BaseModel):
+    """结构化匹配不可用时，供人工检查的单项检索证据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement: str
+    evidence: list[EvidenceRef]
+
+
+class MatchUnavailableResult(BaseModel):
+    """结构化匹配重试耗尽后的无分数结果。
+
+    该对象只表达“尚不能得出匹配结论”及已取得的检索证据，避免将 LLM
+    不可用误写成零分或其他未经验证的分数。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["MATCH_UNAVAILABLE"]
+    resume_version: str
+    retrieval_evidence: list[UnavailableEvidenceItem]
+    message: str

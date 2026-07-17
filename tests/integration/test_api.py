@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from typing import Any
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
@@ -155,6 +156,46 @@ def test_job_analysis_parses_jd_through_http_boundary() -> None:
     assert payload["current_node"] == "prepare_final_review"
     assert payload["status"] == "interrupted"
     assert payload["interrupt"]["type"] == "final_review"
+
+
+def test_job_analysis_generates_uuidv4_session_and_returns_it() -> None:
+    with _client_for(task_queue=["jd_parse"]) as client:
+        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert UUID(payload["session_id"]).version == 4
+    assert UUID(payload["thread_id"]).version == 4
+    assert payload["session_id"] != payload["thread_id"]
+
+
+def test_job_analysis_reuses_valid_header_session_across_two_threads() -> None:
+    session_id = "00000000-0000-4000-8000-000000000001"
+    with _client_for(task_queue=["jd_parse"]) as client:
+        first = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT}, headers={"X-Session-ID": session_id})
+        second = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT}, headers={"X-Session-ID": session_id})
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["session_id"] == second.json()["session_id"] == session_id
+    assert first.json()["thread_id"] != second.json()["thread_id"]
+
+
+def test_job_analysis_rejects_non_uuidv4_session_header() -> None:
+    with _client_for(task_queue=["jd_parse"]) as client:
+        response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT}, headers={"X-Session-ID": "not-a-uuid"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "SESSION_ID_INVALID"
+
+
+def test_resume_recovers_checkpoint_session_without_client_header() -> None:
+    session_id = "00000000-0000-4000-8000-000000000002"
+    with _client_for(task_queue=["jd_parse"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT}, headers={"X-Session-ID": session_id})
+        response = client.post(f"/v1/threads/{initial.json()['thread_id']}/resume", json={"action": "approve"})
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == session_id
 
 
 def test_job_analysis_combines_jd_parse_and_resume_match() -> None:

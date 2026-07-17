@@ -10,9 +10,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +25,7 @@ from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
 from app.schemas.review import HITLCommand
+from app.services.observability import build_log_event, configure_structured_logger
 from pydantic import TypeAdapter, ValidationError
 
 
@@ -114,14 +115,17 @@ def create_app(
     app = FastAPI(title="Job Assistant API", version="0.1.0", lifespan=lifespan)
 
     @app.post("/v1/job-analysis")
-    def analyze_job(request: JobAnalysisRequest) -> JSONResponse:
+    def analyze_job(request: JobAnalysisRequest, x_session_id: str | None = Header(default=None)) -> JSONResponse:
         validation_error = _validate_request(request)
         if validation_error is not None:
             return _error_response(validation_error, status_code=422)
 
         graph = app.state.dependencies.graph
         thread_id = str(uuid4())
-        config = {"configurable": {"thread_id": thread_id}}
+        session_id = _resolve_session_id(x_session_id)
+        if session_id is None:
+            return _error_response(ApiError(code="SESSION_ID_INVALID", message="X-Session-ID must be a UUIDv4"), status_code=422)
+        config = {"configurable": {"thread_id": thread_id, "session_id": session_id}}
         try:
             state = graph.invoke(
                 {
@@ -137,7 +141,7 @@ def create_app(
                 status_code=500,
             )
 
-        return _state_response(state, thread_id=thread_id, snapshot=_safe_get_state(graph, config))
+        return _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
 
     @app.post("/v1/threads/{thread_id}/resume")
     def resume_hitl(thread_id: str, command: dict[str, Any]) -> JSONResponse:
@@ -155,6 +159,14 @@ def create_app(
         validated_command = _validate_hitl_command(command, snapshot)
         if isinstance(validated_command, ApiError):
             return _error_response(validated_command, status_code=422)
+        session_id = _session_id_from_snapshot(snapshot)
+        config["configurable"]["session_id"] = session_id
+        configure_structured_logger().info(
+            build_log_event(
+                event="run_resumed", session_id=session_id, thread_id=thread_id,
+                node="api", node_kind="control", success=None,
+            )
+        )
         try:
             state = graph.invoke(Command(resume=validated_command.model_dump()), config=config)
         except Exception:
@@ -162,7 +174,7 @@ def create_app(
                 ApiError(code="GRAPH_EXECUTION_FAILED", message="Interrupted graph resume failed"),
                 status_code=500,
             )
-        return _state_response(state, thread_id=thread_id, snapshot=_safe_get_state(graph, config))
+        return _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
 
     return app
 
@@ -186,6 +198,7 @@ def _validate_request(request: JobAnalysisRequest) -> ApiError | None:
 def _state_response(
     state: dict[str, Any],
     thread_id: str | None = None,
+    session_id: str | None = None,
     snapshot: Any | None = None,
 ) -> JSONResponse:
     """把 LangGraph State 规范化为 API 响应。
@@ -199,6 +212,7 @@ def _state_response(
     jd_parsed = state.get("jd_parsed")
     payload = {
         "thread_id": thread_id or state.get("thread_id"),
+        "session_id": session_id or "session-unavailable",
         "jd_parsed": _serialize(jd_parsed),
         "match_result": _serialize(state.get("match_result")),
         "interview_state": _serialize(state.get("interview_state")),
@@ -216,6 +230,24 @@ def _state_response(
     else:
         payload["status"] = "completed"
     return JSONResponse(status_code=200, content=payload)
+
+
+def _resolve_session_id(candidate: str | None) -> str | None:
+    """生成新 session UUID，或验证前端复用的会话关联键。"""
+    if candidate is None:
+        return str(uuid4())
+    try:
+        parsed = UUID(candidate)
+    except ValueError:
+        return None
+    return str(parsed) if parsed.version == 4 else None
+
+
+def _session_id_from_snapshot(snapshot: Any) -> str:
+    """从 Checkpoint metadata 恢复 session_id，旧 Checkpoint 缺失时使用显式降级标识。"""
+    metadata = getattr(snapshot, "metadata", {})
+    value = metadata.get("session_id") if isinstance(metadata, dict) else None
+    return value if isinstance(value, str) else "session-unavailable"
 
 
 def _error_response(error: ApiError, *, status_code: int) -> JSONResponse:

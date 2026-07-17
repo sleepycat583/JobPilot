@@ -11,6 +11,34 @@ from pathlib import Path
 import pytest
 
 
+SESSION_METADATA_CHILD_PROGRAM = r'''
+import json
+import sys
+from typing_extensions import TypedDict
+from langgraph.graph import END, StateGraph
+from app.graph.checkpoint import open_sqlite_checkpointer
+
+class State(TypedDict, total=False):
+    marker: str
+
+path, phase = sys.argv[1:]
+checkpointer, connection = open_sqlite_checkpointer(path)
+graph = StateGraph(State)
+graph.add_node("node", lambda state: {"marker": "written"})
+graph.set_entry_point("node")
+graph.add_edge("node", END)
+compiled = graph.compile(checkpointer=checkpointer)
+if phase == "write":
+    config = {"configurable": {"thread_id": "session-metadata-thread", "session_id": "session-metadata-value"}}
+    compiled.invoke({"marker": "input"}, config=config)
+else:
+    config = {"configurable": {"thread_id": "session-metadata-thread"}}
+snapshot = compiled.get_state(config)
+print(json.dumps({"values": snapshot.values, "metadata": snapshot.metadata}))
+connection.close()
+'''
+
+
 ROLLING_SUMMARY_CHILD_PROGRAM = r'''
 import json
 import sys
@@ -229,6 +257,19 @@ def _run_child(checkpoint_path: Path, thread_id: str, phase: str) -> dict[str, o
         text=True,
         encoding="utf-8",
         errors="replace",
+    )
+    return json.loads(completed.stdout)
+
+
+def _run_session_metadata_child(checkpoint_path: Path, phase: str) -> dict[str, object]:
+    """验证新进程仅凭 thread_id 可从 Checkpoint metadata 恢复 session 关联。"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", SESSION_METADATA_CHILD_PROGRAM, str(checkpoint_path), phase],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     return json.loads(completed.stdout)
 
@@ -475,3 +516,16 @@ def test_rolling_summary_failed_checkpoint_recovery_preserves_all_messages(tmp_p
     assert restored["summarized_message_count"] == 2
     assert len(restored["messages"]) == 12
     assert restored["error_log"][-1]["code"] == "SUMMARY_FAILED"
+
+
+@pytest.mark.core_agent_tests
+def test_checkpoint_metadata_preserves_session_id_across_fresh_process(tmp_path: Path) -> None:
+    """session_id 不进入 State，仍必须随 Checkpoint metadata 跨进程保持不漂移。"""
+
+    checkpoint_path = tmp_path / "session-metadata.sqlite3"
+    written = _run_session_metadata_child(checkpoint_path, "write")
+    restored = _run_session_metadata_child(checkpoint_path, "read")
+
+    assert written["values"] == restored["values"] == {"marker": "written"}
+    assert written["metadata"]["session_id"] == restored["metadata"]["session_id"] == "session-metadata-value"
+    assert restored["metadata"]["thread_id"] == "session-metadata-thread"

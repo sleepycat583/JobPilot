@@ -137,6 +137,7 @@ def _build_llm_analysis(responsibility_relevance: float) -> str:
         ("interview_await_answer", _resolve_interview_resume_route, {"interview_state": InterviewState(status="waiting", target_question_count=1, current_question_id="q-1", question_records=[], user_context_updates=[], report=None, plan=[])}, "wait"),
         ("evaluate_answer", lambda _: "interview_decision", {}, "interview_decision"),
         ("interview_decision", _resolve_interview_decision_route, {"interview_next_action": "finish"}, "report"),
+        ("interview_decision", _resolve_interview_decision_route, {"interview_next_action": "retry_evaluation"}, "retry_evaluation"),
         ("generate_review_report", lambda _: "prepare_final_review", {}, "prepare_final_review"),
         ("clarify_node", lambda _: "end", {}, "end"),
         ("out_of_scope_node", lambda _: "end", {}, "end"),
@@ -485,6 +486,68 @@ def test_interview_submit_answer_evaluates_and_waits_for_next_question() -> None
     assert resumed["interview_state"].question_records[0].answer == "我负责过缓存优化项目。"
     assert resumed["interview_state"].question_records[0].scores["technical_accuracy"] == 70.0
     assert resumed["current_node"] == "ask_question"
+
+
+@pytest.mark.core_agent_tests
+def test_interview_evaluation_retry_reuses_original_record_without_question_count_growth() -> None:
+    class EvaluationFailsThenSucceedsModel(FakeChatModel):
+        evaluation_calls: int = 0
+
+        def _interview_response(self, prompt: str) -> str:
+            if "AnswerEvaluation" in prompt:
+                self.evaluation_calls += 1
+                if self.evaluation_calls <= 3:
+                    return '{"bad":"json"}'
+            return super()._interview_response(prompt)
+
+    graph = build_graph(EvaluationFailsThenSucceedsModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-evaluation-retry-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+
+    unavailable = graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
+    assert unavailable["interview_state"].question_records[0].evaluation_status == "unavailable"
+    assert graph.get_state(config).tasks[0].interrupts[0].value == {
+        "type": "interview_evaluation_unavailable",
+        "target": "question_record",
+        "question_id": "q-1",
+        "accepted_actions": ["retry_evaluation", "skip_evaluation"],
+    }
+
+    retried = graph.invoke(Command(resume={"action": "retry_evaluation"}), config=config)
+    records = retried["interview_state"].question_records
+    assert [record.question_id for record in records] == ["q-1", "q-2"]
+    assert records[0].evaluation_status == "available"
+    assert records[0].answer == "我负责过缓存优化项目。"
+    assert records[0].scores["technical_accuracy"] == 70.0
+
+
+@pytest.mark.core_agent_tests
+def test_all_unavailable_evaluations_keep_null_scores_and_enter_final_review_gate() -> None:
+    """零个可聚合样本仍必须进入既有最终核可，而不是绕过 Review Gate。"""
+
+    class EvaluationAndReportFailModel(FakeChatModel):
+        def _interview_response(self, prompt: str) -> str:
+            if "AnswerEvaluation" in prompt or "InterviewReportNarrative" in prompt:
+                return '{"bad":"json"}'
+            return super()._interview_response(prompt)
+
+    graph = build_graph(EvaluationAndReportFailModel(['{"route":"mock_interview","confidence":0.9,"reason":"interview","task_queue":[]}']), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "interview-zero-score-review-test"}}
+    graph.invoke({"user_input": "开始模拟面试"}, config=config)
+    graph.invoke(Command(resume={"action": "submit_answer", "answer": "我负责过缓存优化项目。"}), config=config)
+
+    review = graph.invoke(Command(resume={"action": "skip_evaluation"}), config=config)
+    assert graph.get_state(config).tasks[0].interrupts[0].value["type"] == "interview_answer"
+
+    final_review = graph.invoke(Command(resume={"action": "end_interview"}), config=config)
+    report = final_review["interview_state"].report
+    assert report is not None
+    assert report.scoring_status == "unavailable"
+    assert report.overall_score is None
+    assert report.dimension_scores is None
+    assert final_review["review_status"] == "in_review"
+    assert final_review["review_target"] == "interview_report"
+    assert graph.get_state(config).tasks[0].interrupts[0].value["type"] == "final_review"
 
 
 @pytest.mark.core_agent_tests

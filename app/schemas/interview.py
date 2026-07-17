@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 InterviewDimension = Literal["technical_accuracy", "structure", "job_relevance", "evidence"]
 AnswerRelevance = Literal["on_topic", "partial", "off_topic"]
+EvaluationStatus = Literal["pending", "available", "unavailable"]
+ReportScoringStatus = Literal["available", "unavailable"]
 
 
 class InterviewTopicPlan(BaseModel):
@@ -103,6 +105,7 @@ class QuestionRecord(BaseModel):
     feedback: str
     strengths: list[str]
     issues: list[str]
+    evaluation_status: EvaluationStatus = "pending"
     answer_relevance: AnswerRelevance | None = None
     fatal_error: bool = False
     fatal_error_reason: str | None = Field(default=None, min_length=1, max_length=1000)
@@ -111,10 +114,21 @@ class QuestionRecord(BaseModel):
     def validate_record_score_shape(self) -> "QuestionRecord":
         """允许等待态空分数，同时拒绝部分或越界的已评价分数。"""
 
+        if self.evaluation_status == "unavailable":
+            if not self.answer.strip() or self.scores or self.feedback or self.strengths or self.issues:
+                raise ValueError("unavailable records require an answer and no evaluation content")
+            if self.answer_relevance is not None or self.fatal_error or self.fatal_error_reason is not None:
+                raise ValueError("unavailable records cannot contain evaluation route signals")
+            return self
         if not self.scores:
             if self.answer_relevance is not None or self.fatal_error or self.fatal_error_reason is not None:
                 raise ValueError("unevaluated records cannot contain evaluation route signals")
             return self
+        # 兼容既有 Checkpoint 与调用方：有完整分数即为已评价记录。
+        if self.evaluation_status == "pending":
+            self.evaluation_status = "available"
+        if self.evaluation_status != "available":
+            raise ValueError("records with scores must have available evaluation_status")
         expected_dimensions = {"technical_accuracy", "structure", "job_relevance", "evidence"}
         if set(self.scores) != expected_dimensions:
             raise ValueError("scores must be empty or contain exactly the four interview dimensions")
@@ -164,8 +178,9 @@ class InterviewReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    overall_score: float = Field(ge=0.0, le=100.0)
-    dimension_scores: dict[InterviewDimension, float]
+    overall_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    dimension_scores: dict[InterviewDimension, float] | None = None
+    scoring_status: ReportScoringStatus = "available"
     performance_summary: str = Field(min_length=1, max_length=4000)
     recurring_strengths: list[str]
     recurring_weaknesses: list[str]
@@ -180,6 +195,12 @@ class InterviewReport(BaseModel):
     def validate_report_scores(self) -> "InterviewReport":
         """保证报告分数维度完整，完整性事实不由自由文本代替。"""
 
+        if self.scoring_status == "unavailable":
+            if self.overall_score is not None or self.dimension_scores is not None:
+                raise ValueError("unavailable report scoring must not include scores")
+            return self
+        if self.overall_score is None or self.dimension_scores is None:
+            raise ValueError("available report scoring requires overall_score and dimension_scores")
         expected_dimensions = {"technical_accuracy", "structure", "job_relevance", "evidence"}
         if set(self.dimension_scores) != expected_dimensions:
             raise ValueError("dimension_scores must contain exactly the four interview dimensions")

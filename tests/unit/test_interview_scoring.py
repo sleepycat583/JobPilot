@@ -216,6 +216,47 @@ def test_score_rejects_unevaluated_record() -> None:
 
 
 @pytest.mark.core_agent_tests
+def test_score_excludes_unavailable_records_but_keeps_available_dimension_means() -> None:
+    unavailable = QuestionRecord(
+        question_id="q-2",
+        topic="项目经历",
+        question="请介绍项目。",
+        answer="回答已提交。",
+        follow_up_of=None,
+        scores={},
+        feedback="",
+        strengths=[],
+        issues=[],
+        evaluation_status="unavailable",
+    )
+
+    breakdown = calculate_interview_score([_record("q-1", "项目经历", technical=80.0), unavailable])
+
+    assert breakdown.dimension_scores is not None
+    assert breakdown.dimension_scores["technical_accuracy"] == 80.0
+    assert breakdown.overall_score == 74.0
+
+
+@pytest.mark.core_agent_tests
+def test_score_returns_null_only_when_every_answered_record_is_unavailable() -> None:
+    unavailable = QuestionRecord(
+        question_id="q-1",
+        topic="项目经历",
+        question="请介绍项目。",
+        answer="回答已提交。",
+        follow_up_of=None,
+        scores={},
+        feedback="",
+        strengths=[],
+        issues=[],
+        evaluation_status="unavailable",
+    )
+
+    breakdown = calculate_interview_score([unavailable])
+
+    assert breakdown.overall_score is None
+    assert breakdown.dimension_scores is None
+@pytest.mark.core_agent_tests
 def test_completion_metadata_marks_user_ended_partial_interview_as_limited() -> None:
     metadata = build_completion_metadata(_plan(), [_record("q-1", "项目经历")], "user_ended")
 

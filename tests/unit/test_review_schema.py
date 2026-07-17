@@ -3,7 +3,13 @@
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from app.schemas.review import HITLCommand, HITLInterruptPayload, LowScoreInterruptPayload, LowScoreReviewCommand
+from app.schemas.review import (
+    HITLCommand,
+    HITLInterruptPayload,
+    InterviewEvaluationUnavailableInterruptPayload,
+    LowScoreInterruptPayload,
+    LowScoreReviewCommand,
+)
 
 
 @pytest.mark.core_agent_tests
@@ -65,3 +71,18 @@ def test_hitl_payload_union_selects_interview_contract() -> None:
     )
 
     assert payload.target == "interview_state"
+
+
+@pytest.mark.core_agent_tests
+def test_evaluation_unavailable_hitl_contract_allows_only_retry_or_skip() -> None:
+    payload = InterviewEvaluationUnavailableInterruptPayload(
+        type="interview_evaluation_unavailable",
+        question_id="q-1",
+        accepted_actions=["retry_evaluation", "skip_evaluation"],
+    )
+    adapter = TypeAdapter(HITLCommand)
+
+    assert payload.target == "question_record"
+    assert adapter.validate_python({"type": "interview_evaluation_unavailable", "action": "retry_evaluation"}).action == "retry_evaluation"
+    with pytest.raises(ValidationError):
+        adapter.validate_python({"type": "interview_evaluation_unavailable", "action": "submit_answer"})

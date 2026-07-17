@@ -81,6 +81,26 @@ class InterviewInterruptPayload(BaseModel):
     accepted_actions: list[Literal["submit_answer", "context_update", "end_interview"]] = Field(min_length=1)
 
 
+class InterviewEvaluationUnavailableCommand(BaseModel):
+    """校验单题评价不可用时的恢复命令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["interview_evaluation_unavailable"] = "interview_evaluation_unavailable"
+    action: Literal["retry_evaluation", "skip_evaluation"]
+
+
+class InterviewEvaluationUnavailableInterruptPayload(BaseModel):
+    """单题结构化评价耗尽重试后发送给调用方的最小上下文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["interview_evaluation_unavailable"]
+    target: Literal["question_record"] = "question_record"
+    question_id: str
+    accepted_actions: list[Literal["retry_evaluation", "skip_evaluation"]] = Field(min_length=1)
+
+
 class FinalReviewCommand(BaseModel):
     """校验最终候选产物核可的恢复命令。"""
 
@@ -111,10 +131,10 @@ class FinalReviewInterruptPayload(BaseModel):
 
 
 HITLCommand = Annotated[
-    Union[LowScoreReviewCommand, InterviewAnswerCommand, FinalReviewCommand],
+    Union[LowScoreReviewCommand, InterviewAnswerCommand, InterviewEvaluationUnavailableCommand, FinalReviewCommand],
     Field(discriminator="type"),
 ]
 HITLInterruptPayload = Annotated[
-    Union[LowScoreInterruptPayload, InterviewInterruptPayload, FinalReviewInterruptPayload],
+    Union[LowScoreInterruptPayload, InterviewInterruptPayload, InterviewEvaluationUnavailableInterruptPayload, FinalReviewInterruptPayload],
     Field(discriminator="type"),
 ]

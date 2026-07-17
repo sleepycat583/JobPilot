@@ -110,6 +110,25 @@ def test_question_record_rejects_evaluation_signals_without_scores() -> None:
 
 
 @pytest.mark.core_agent_tests
+def test_question_record_allows_answered_unavailable_evaluation_without_default_scores() -> None:
+    record = QuestionRecord(
+        question_id="q-1",
+        topic="项目经历",
+        question="请介绍一个项目。",
+        answer="我负责了缓存优化。",
+        follow_up_of=None,
+        scores={},
+        feedback="",
+        strengths=[],
+        issues=[],
+        evaluation_status="unavailable",
+    )
+
+    assert record.evaluation_status == "unavailable"
+    assert record.scores == {}
+
+
+@pytest.mark.core_agent_tests
 def test_interview_report_requires_complete_bounded_dimension_scores() -> None:
     report = InterviewReport(
         overall_score=72.5,
@@ -128,6 +147,28 @@ def test_interview_report_requires_complete_bounded_dimension_scores() -> None:
     assert report.completion_reason == "target_reached"
     with pytest.raises(ValidationError, match="within 0..100"):
         InterviewReport.model_validate({**report.model_dump(), "dimension_scores": _scores(evidence=-0.1)})
+
+
+@pytest.mark.core_agent_tests
+def test_interview_report_allows_null_scores_only_for_unavailable_scoring() -> None:
+    report = InterviewReport(
+        overall_score=None,
+        dimension_scores=None,
+        scoring_status="unavailable",
+        performance_summary="不可用：复盘文字生成失败，请人工核可。",
+        recurring_strengths=["不可用：复盘文字生成失败，请人工核可。"],
+        recurring_weaknesses=["不可用：复盘文字生成失败，请人工核可。"],
+        review_actions=[],
+        question_references=["q-1"],
+        completion_reason="user_ended",
+        covered_topics=["项目经历"],
+        uncovered_topics=[],
+        sample_limited=True,
+    )
+
+    assert report.overall_score is None
+    with pytest.raises(ValidationError, match="available report scoring requires"):
+        InterviewReport.model_validate({**report.model_dump(), "scoring_status": "available"})
 
 
 @pytest.mark.core_agent_tests

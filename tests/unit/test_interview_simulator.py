@@ -8,7 +8,9 @@ from app.agents.interview_simulator import (
     ask_question,
     build_interview_plan,
     evaluate_answer,
+    evaluate_answer_node,
     generate_review_report,
+    generate_review_report_node,
     initialize_interview_state,
 )
 from app.schemas.interview import InterviewPlanOutput, InterviewState, InterviewTopicPlan, QuestionRecord
@@ -209,6 +211,60 @@ def test_evaluate_answer_uses_structured_output_retry_without_mutating_record() 
     assert result.retry_count == 2
     assert len(result.error_log) == 3
     assert record.scores == {}
+
+
+@pytest.mark.core_agent_tests
+def test_evaluate_answer_node_marks_only_current_record_unavailable_after_three_failures() -> None:
+    previous = _evaluated_record("q-1")
+    current = _evaluated_record("q-2", "项目经历").model_copy(
+        update={"scores": {}, "feedback": "", "strengths": [], "issues": [], "answer_relevance": None}
+    )
+    state = {
+        "user_input": "后端工程师",
+        "interview_state": _state([previous, current]).model_copy(update={"current_question_id": "q-2"}),
+    }
+
+    update = evaluate_answer_node(state, FakeChatModel([{"bad": "json"}, {"bad": "json"}, {"bad": "json"}]))
+
+    records = update["interview_state"].question_records
+    assert [record.question_id for record in records] == ["q-1", "q-2"]
+    assert records[0].model_dump() == previous.model_dump()
+    assert records[1].evaluation_status == "unavailable"
+    assert records[1].scores == {}
+    assert len(update["error_log"]) == 3
+
+
+@pytest.mark.core_agent_tests
+def test_generate_review_report_degrades_to_deterministic_scores_and_unavailable_text() -> None:
+    state = _state([_evaluated_record("q-1"), _evaluated_record("q-2", "项目经历")])
+
+    result = generate_review_report(
+        FakeChatModel([{"bad": "json"}, {"bad": "json"}, {"bad": "json"}]),
+        state,
+        completion_reason="user_ended",
+    )
+
+    assert result.degraded is True
+    assert result.value is not None
+    assert result.value.overall_score == 75.0
+    assert result.value.dimension_scores is not None
+    assert result.value.question_references == ["q-1", "q-2"]
+    assert result.value.performance_summary.startswith("不可用：")
+
+
+@pytest.mark.core_agent_tests
+def test_generate_review_report_node_keeps_degraded_report_on_final_review_path() -> None:
+    interview_state = _state([_evaluated_record()])
+
+    update = generate_review_report_node(
+        {"interview_state": interview_state, "interview_completion_reason": "user_ended"},
+        FakeChatModel([{"bad": "json"}, {"bad": "json"}, {"bad": "json"}]),
+    )
+
+    assert update["review_status"] == "pending"
+    assert update["review_target"] == "interview_report"
+    assert update["interview_state"].report is not None
+    assert update["interview_state"].report.performance_summary.startswith("不可用：")
 
 
 @pytest.mark.core_agent_tests

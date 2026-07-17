@@ -207,7 +207,7 @@ def build_graph(
     graph.add_conditional_edges(
         "interview_decision",
         _guard_route("interview_decision", _resolve_interview_decision_route),
-        {"ask": "ask_question", "report": "generate_review_report", "error": "error_node"},
+        {"ask": "ask_question", "retry_evaluation": "evaluate_answer", "report": "generate_review_report", "error": "error_node"},
     )
     _add_guarded_edge(graph, "generate_review_report", "prepare_final_review")
     _add_guarded_edge(graph, "clarify_node", END)
@@ -346,6 +346,8 @@ def _resolve_interview_resume_route(state: JobAssistantState) -> str:
 def _resolve_interview_decision_route(state: JobAssistantState) -> str:
     """由确定性 decision action 决定继续出题或生成 report。"""
 
+    if state.get("interview_next_action") == "retry_evaluation":
+        return "retry_evaluation"
     return "report" if state.get("interview_next_action") == "finish" else "ask"
 
 

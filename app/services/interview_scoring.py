@@ -48,8 +48,8 @@ class InterviewDecision:
 class InterviewScoreBreakdown:
     """逐题聚合后的四维分与确定性总分。"""
 
-    overall_score: float
-    dimension_scores: dict[InterviewDimension, float]
+    overall_score: float | None
+    dimension_scores: dict[InterviewDimension, float] | None
 
 
 @dataclass(frozen=True)
@@ -111,6 +111,8 @@ def decide_next_interview_action(
         return InterviewDecision("next_topic")
 
     current = records[-1]
+    if current.evaluation_status == "unavailable":
+        return InterviewDecision("next_topic")
     _require_evaluated_record(current)
     if current.answer_relevance == "off_topic":
         return InterviewDecision("next_topic" if current_question_retried else "retry_same_question")
@@ -129,8 +131,9 @@ def decide_next_interview_action(
 def calculate_interview_score(records: list[QuestionRecord]) -> InterviewScoreBreakdown:
     """按主问题 1.0、追问 0.5 聚合四维并计算固定权重总分。
 
-    空记录返回全零分，便于用户第一题前提前结束时生成样本不足报告；含有
-    未评价记录时抛出 ValueError，避免将等待态题目静默计入最终结论。
+    空记录返回全零分，便于用户第一题前提前结束时生成样本不足报告；等待态记录
+    仍抛出 ValueError。已回答但评价不可用的记录不会写入猜测分数；仅当所有记录
+    都是 unavailable 时返回 None，供报告明确披露零个可聚合样本。
     """
 
     if not records:
@@ -143,11 +146,16 @@ def calculate_interview_score(records: list[QuestionRecord]) -> InterviewScoreBr
         return InterviewScoreBreakdown(overall_score=0.0, dimension_scores=zero_scores)
 
     for record in records:
+        if record.evaluation_status == "unavailable":
+            continue
         _require_evaluated_record(record)
-    total_weight = sum(_record_weight(record) for record in records)
+    evaluated_records = [record for record in records if record.evaluation_status == "available"]
+    if not evaluated_records:
+        return InterviewScoreBreakdown(overall_score=None, dimension_scores=None)
+    total_weight = sum(_record_weight(record) for record in evaluated_records)
     dimension_scores: dict[InterviewDimension, float] = {}
     for dimension in INTERVIEW_DIMENSION_WEIGHTS:
-        weighted_total = sum(record.scores[dimension] * _record_weight(record) for record in records)
+        weighted_total = sum(record.scores[dimension] * _record_weight(record) for record in evaluated_records)
         dimension_scores[dimension] = round(weighted_total / total_weight, 1)
     overall_score = round(
         sum(dimension_scores[dimension] * weight for dimension, weight in INTERVIEW_DIMENSION_WEIGHTS.items()),
@@ -191,5 +199,5 @@ def _record_weight(record: QuestionRecord) -> float:
 
 
 def _require_evaluated_record(record: QuestionRecord) -> None:
-    if not record.scores or record.answer_relevance is None:
+    if record.evaluation_status != "available" or not record.scores or record.answer_relevance is None:
         raise ValueError("interview scoring requires evaluated question records")

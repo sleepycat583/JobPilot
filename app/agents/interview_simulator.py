@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from langgraph.types import interrupt
+
 from app.schemas.interview import (
     AnswerEvaluation,
     InterviewPlanOutput,
@@ -21,6 +23,7 @@ from app.schemas.interview import (
 )
 from app.schemas.jd import JDParsed
 from app.schemas.resume import MatchResult
+from app.schemas.review import InterviewEvaluationUnavailableInterruptPayload
 from app.services.interview_scoring import CompletionReason, build_completion_metadata, calculate_interview_score
 from app.services.structured_output import StructuredPromptContext, StructuredOutputResult, call_with_structured_output
 
@@ -57,24 +60,68 @@ def ask_question_node(state: dict[str, object], chat_model: Any) -> dict[str, ob
 
 
 def evaluate_answer_node(state: dict[str, object], chat_model: Any) -> dict[str, object]:
-    """Graph 节点：只评价当前已回答题，并保留此前所有记录。"""
+    """Graph 节点：只评价当前已回答题，并保留此前所有记录。
+
+    结构化评价耗尽内部重试后，按原题 ID 原地标记不可用，不写入猜测分数；
+    后续 decision 节点让用户选择重评或跳过，重评仍会回到本节点替换同一条记录。
+    """
 
     interview_state = _require_state(state)
     current = _find_record(interview_state.question_records, interview_state.current_question_id or "")
     result = evaluate_answer(chat_model, current, user_goal=str(state.get("user_input", "")))
     if result.value is None:
-        raise ValueError("answer evaluation degraded after structured-output retries")
+        unavailable = QuestionRecord.model_validate(
+            {
+                **current.model_dump(),
+                "scores": {},
+                "feedback": "",
+                "strengths": [],
+                "issues": [],
+                "evaluation_status": "unavailable",
+                "answer_relevance": None,
+                "fatal_error": False,
+                "fatal_error_reason": None,
+            }
+        )
+        updated_records = [unavailable if item.question_id == current.question_id else item for item in interview_state.question_records]
+        return {
+            "current_node": "evaluate_answer",
+            "interview_state": interview_state.model_copy(update={"status": "evaluating", "question_records": updated_records}),
+            "retry_count": {"evaluate_answer": result.retry_count},
+            "error_log": result.error_log,
+        }
     updated_records = [result.value if item.question_id == current.question_id else item for item in interview_state.question_records]
     return {"current_node": "evaluate_answer", "interview_state": interview_state.model_copy(update={"status": "evaluating", "question_records": updated_records}), "retry_count": {"evaluate_answer": result.retry_count}, "error_log": result.error_log}
 
 
 def interview_decision_node(state: dict[str, object]) -> dict[str, object]:
-    """Graph 节点：调用确定性规则，将评价转换为受限的下一跳动作。"""
+    """Graph 节点：调用确定性规则，将评价转换为受限的下一跳动作。
+
+    本节点不调用 LLM 或外部服务。评价不可用时可以安全地通过 interrupt 等待用户
+    选择：重评复用原答案返回评价节点，跳过则继续同一套确定性决策规则。
+    """
 
     from app.services.interview_scoring import decide_next_interview_action
 
     interview_state = _require_state(state)
     current = interview_state.question_records[-1] if interview_state.question_records else None
+    if current is not None and current.evaluation_status == "unavailable":
+        payload = InterviewEvaluationUnavailableInterruptPayload(
+            type="interview_evaluation_unavailable",
+            question_id=current.question_id,
+            accepted_actions=["retry_evaluation", "skip_evaluation"],
+        )
+        user_choice = interrupt(payload.model_dump(mode="json"))
+        action = user_choice.get("action") if isinstance(user_choice, dict) else None
+        if action == "retry_evaluation":
+            return {
+                "current_node": "interview_decision",
+                "interview_next_action": "retry_evaluation",
+                "interview_completion_reason": None,
+                "interview_follow_up_of": None,
+            }
+        if action != "skip_evaluation":
+            raise ValueError("Unsupported evaluation-unavailable action")
     decision = decide_next_interview_action(interview_state, current_question_retried=bool(current and current.follow_up_of))
     return {"current_node": "interview_decision", "interview_next_action": decision.action, "interview_completion_reason": decision.completion_reason, "interview_follow_up_of": current.question_id if current and decision.action != "next_topic" and decision.action != "finish" else None}
 
@@ -230,6 +277,7 @@ def evaluate_answer(chat_model: Any, record: QuestionRecord, *, user_goal: str =
             "feedback": evaluation.feedback,
             "strengths": evaluation.strengths,
             "issues": evaluation.issues,
+            "evaluation_status": "available",
             "answer_relevance": evaluation.answer_relevance,
             "fatal_error": evaluation.fatal_error,
             "fatal_error_reason": evaluation.fatal_error_reason,
@@ -264,7 +312,31 @@ def generate_review_report(
         "generate_review_report",
     )
     if raw_result.value is None:
-        return StructuredOutputResult(value=None, retry_count=raw_result.retry_count, error_log=raw_result.error_log, degraded=True)
+        unavailable_marker = "不可用：复盘文字生成失败，请人工核可。"
+        report = InterviewReport(
+            overall_score=score.overall_score,
+            dimension_scores=score.dimension_scores,
+            scoring_status="unavailable" if score.overall_score is None else "available",
+            performance_summary=unavailable_marker,
+            recurring_strengths=[unavailable_marker],
+            recurring_weaknesses=[unavailable_marker],
+            review_actions=[
+                {
+                    "priority": "P0",
+                    "weakness": unavailable_marker,
+                    "related_questions": [],
+                    "study_topic": unavailable_marker,
+                    "practice_action": unavailable_marker,
+                    "verification": unavailable_marker,
+                }
+            ],
+            question_references=sorted(allowed_ids),
+            completion_reason=metadata.completion_reason,
+            covered_topics=metadata.covered_topics,
+            uncovered_topics=metadata.uncovered_topics,
+            sample_limited=metadata.sample_limited,
+        )
+        return StructuredOutputResult(value=report, retry_count=raw_result.retry_count, error_log=raw_result.error_log, degraded=True)
     narrative = raw_result.value
     # 空样本复盘没有合法题号；清空模型误带的引用，避免为“尚未回答”制造题目事实。
     if not allowed_ids and (narrative.question_references or narrative.review_actions):
@@ -273,6 +345,7 @@ def generate_review_report(
     report = InterviewReport(
         overall_score=score.overall_score,
         dimension_scores=score.dimension_scores,
+        scoring_status="unavailable" if score.overall_score is None else "available",
         performance_summary=narrative.performance_summary,
         recurring_strengths=narrative.recurring_strengths,
         recurring_weaknesses=narrative.recurring_weaknesses,

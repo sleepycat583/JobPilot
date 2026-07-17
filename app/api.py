@@ -295,7 +295,7 @@ def _validate_hitl_command(command: dict[str, Any], snapshot: Any) -> HITLComman
 
     interrupt_payload = _extract_interrupt(snapshot)
     interrupt_type = interrupt_payload.get("type") if interrupt_payload else None
-    if interrupt_type not in {"low_match_score", "interview_answer", "final_review"}:
+    if interrupt_type not in {"low_match_score", "interview_answer", "interview_evaluation_unavailable", "final_review"}:
         return ApiError(code="INTERRUPT_PROTOCOL_INVALID", message="Interrupted checkpoint has no supported HITL type")
     candidate = {**command, "type": command.get("type", interrupt_type)}
     try:

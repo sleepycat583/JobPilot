@@ -69,7 +69,9 @@ Week3 详细规划书。
 |---|---|
 | Task 0 / SSE 第一轮调研 | 已完成 |
 | Task 1 | 已完成（ADR-001 已冻结异步启动与 SSE 契约） |
-| Task 2-4 | 等待前置任务 |
+| Task 2 | 已完成 |
+| Task 3 | 部分完成：`node_started` / `node_finished` / `interrupt_required` / `node_retrying` 已接入；`run_failed` / `run_completed` 留给 Task 4 |
+| Task 4 | 等待前置任务 |
 | Task 5 | 未开始 |
 | Task 6 | 未开始 |
 | Task 7 | 未开始，可与 Task 5-6 并行 |

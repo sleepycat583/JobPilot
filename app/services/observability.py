@@ -14,16 +14,20 @@ import time
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from langgraph.errors import GraphInterrupt
+
+from app.constants import MAX_FORMAT_RETRIES
 
 DEFAULT_LOG_DIR = "./logs"
 DEFAULT_LOG_LEVEL = "INFO"
 LOG_FILE_NAME = "job-assistant.jsonl"
 LOG_RETENTION_DAYS = 14
 MAX_REDACTED_TEXT_LENGTH = 500
+
+_DEFAULT_EVENT_PUBLISHER: Callable[[dict[str, Any]], None] | None = None
 
 _EMAIL_PATTERN = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
@@ -87,6 +91,19 @@ def configure_structured_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     return logger
+
+
+def configure_event_publisher(event_publisher: Callable[[dict[str, Any]], None] | None) -> None:
+    """配置 observer 使用的默认事件总线发布入口。
+
+    参数：
+        event_publisher: 供 observer 额外发布 SSE 同源事件的可调用对象；传 `None` 表示关闭发布。
+    返回：
+        无；仅更新模块级默认发布器，供 `observe_node` 在未显式注入时读取。
+    """
+
+    global _DEFAULT_EVENT_PUBLISHER
+    _DEFAULT_EVENT_PUBLISHER = event_publisher
 
 
 def build_log_event(
@@ -178,11 +195,15 @@ def observe_node(node_name: str, node_kind: str, function: Any, logger: logging.
         started_perf = time.perf_counter()
         node_run_id = new_node_run_id()
         input_summary = build_safe_input_summary(state, node_name)
-        event_logger.info(build_log_event(event="agent_node_started", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, input_summary=input_summary, success=None))
+        started_event = build_log_event(event="agent_node_started", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, input_summary=input_summary, success=None)
+        event_logger.info(started_event)
+        _publish_bus_event(started_event, mapped_event="node_started", detail=str(started_event.get("input_summary", "")))
         try:
             update = dict(function(state))
         except GraphInterrupt:
-            event_logger.info(build_log_event(event="agent_node_interrupted", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=None))
+            interrupted_event = build_log_event(event="agent_node_interrupted", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=None)
+            event_logger.info(interrupted_event)
+            _publish_bus_event(interrupted_event, mapped_event="interrupt_required", detail=str(interrupted_event.get("input_summary", "")))
             raise
         except Exception as exc:
             if not capture_exceptions:
@@ -198,8 +219,14 @@ def observe_node(node_name: str, node_kind: str, function: Any, logger: logging.
         for entry in update.get("error_log", []):
             if isinstance(entry, dict):
                 _normalize_error_entry(entry)
-                _log_error(event_logger, entry, session_id, thread_id, node_kind, node_run_id, started_at, started_perf, input_summary)
-        event_logger.info(build_log_event(event="agent_node_finished", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=True))
+                failed_event = _log_error(event_logger, entry, session_id, thread_id, node_kind, node_run_id, started_at, started_perf, input_summary)
+                if bool(entry.get("retryable")) and int(entry.get("attempt", 0)) < MAX_FORMAT_RETRIES:
+                    # 当前 node_retrying 只能在节点返回后按 error_log 顺序统一派生，
+                    # 无法在下一次模型调用开始前实时发出；这是现有 structured-output 返回时机带来的约束。
+                    _publish_bus_event(failed_event, mapped_event="node_retrying", detail=str(failed_event.get("message") or failed_event.get("error_code") or ""))
+        finished_event = build_log_event(event="agent_node_finished", session_id=session_id, thread_id=thread_id, node=node_name, node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=True)
+        event_logger.info(finished_event)
+        _publish_bus_event(finished_event, mapped_event="node_finished", detail=str(finished_event.get("input_summary", "")))
         return update
 
     return wrapper
@@ -213,8 +240,10 @@ def _normalize_error_entry(entry: dict[str, Any]) -> None:
             entry[field_name] = redact_text(value)
 
 
-def _log_error(logger: logging.Logger, entry: Mapping[str, Any], session_id: str, thread_id: str, node_kind: str, node_run_id: str, started_at: str, started_perf: float, input_summary: str) -> None:
-    logger.warning(build_log_event(event="agent_node_failed", session_id=session_id, thread_id=thread_id, node=str(entry["node"]), node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=False, error_code=str(entry["code"]), attempt=entry["attempt"], message=str(entry["message"]), raw_output_excerpt=entry.get("raw_output_excerpt"), error_entry=entry))
+def _log_error(logger: logging.Logger, entry: Mapping[str, Any], session_id: str, thread_id: str, node_kind: str, node_run_id: str, started_at: str, started_perf: float, input_summary: str) -> dict[str, Any]:
+    event = build_log_event(event="agent_node_failed", session_id=session_id, thread_id=thread_id, node=str(entry["node"]), node_kind=node_kind, node_run_id=node_run_id, started_at=started_at, ended_at=utc_now_iso(), duration_ms=_elapsed_ms(started_perf), input_summary=input_summary, success=False, error_code=str(entry["code"]), attempt=entry["attempt"], message=str(entry["message"]), raw_output_excerpt=entry.get("raw_output_excerpt"), error_entry=entry)
+    logger.warning(event)
+    return event
 
 
 def _execution_error_event(node_name: str, entry: Mapping[str, Any]) -> dict[str, str]:
@@ -240,3 +269,22 @@ def _resolve_log_level(level: str) -> int:
 
 def _json_default(value: Any) -> str:
     return str(value)
+
+
+def _publish_bus_event(source_event: Mapping[str, Any], *, mapped_event: str, detail: str) -> None:
+    """尽力把日志同源事件额外发布到事件总线。
+
+    为什么这样做：
+        事件总线是附加的 SSE 基础设施，发布失败不得影响 Graph 正常执行或 JSONL 日志写入。
+        因此这里必须静默降级，只保留原有日志与业务语义。
+    """
+
+    if _DEFAULT_EVENT_PUBLISHER is None:
+        return
+    try:
+        payload = dict(source_event)
+        payload["event"] = mapped_event
+        payload["detail"] = redact_text(detail)
+        _DEFAULT_EVENT_PUBLISHER(payload)
+    except Exception:
+        return

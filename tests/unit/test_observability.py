@@ -6,16 +6,19 @@ import json
 import logging
 from pathlib import Path
 from time import sleep
+import asyncio
 
 import pytest
 from langgraph.errors import GraphInterrupt
 
+from app.services.event_bus import SessionEventBus
 from app.services.observability import (
     LOG_FILE_NAME,
     LOG_RETENTION_DAYS,
     SafeTimedRotatingFileHandler,
     build_log_event,
     build_safe_input_summary,
+    configure_event_publisher,
     configure_structured_logger,
     new_node_run_id,
     observe_node,
@@ -159,6 +162,116 @@ def test_observer_preserves_graph_interrupt_without_error_entry(tmp_path: Path) 
     events = [json.loads(line) for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
 
     assert [event["event"] for event in events] == ["agent_node_started", "agent_node_interrupted"]
+
+
+def test_observer_publishes_node_started_and_node_finished_to_event_bus(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.bus-lifecycle", include_stdout=False)
+        bus = SessionEventBus(loop=asyncio.get_running_loop())
+        configure_event_publisher(bus.publish_threadsafe)
+        subscription = bus.subscribe("s")
+        bus.register_thread("s", "t")
+        try:
+            wrapped = observe_node("supervisor", "agent", lambda _: {"ok": True}, logger)
+
+            update = wrapped({"user_input": "test"}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+            first = await asyncio.wait_for(subscription.next_event(), timeout=1)
+            second = await asyncio.wait_for(subscription.next_event(), timeout=1)
+
+            assert update == {"ok": True}
+            assert [first["event"], second["event"]] == ["node_started", "node_finished"]
+            assert [first["session_sequence"], second["session_sequence"]] == [1, 2]
+        finally:
+            configure_event_publisher(None)
+
+    asyncio.run(scenario())
+
+
+def test_observer_event_bus_publish_does_not_change_jsonl_event_names(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.jsonl-stable", include_stdout=False)
+        bus = SessionEventBus(loop=asyncio.get_running_loop())
+        configure_event_publisher(bus.publish_threadsafe)
+        bus.register_thread("s", "t")
+        try:
+            observe_node("supervisor", "agent", lambda _: {"ok": True}, logger)({"user_input": "x"}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+            _flush(logger)
+            events = [json.loads(line)["event"] for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
+
+            assert events == ["agent_node_started", "agent_node_finished"]
+        finally:
+            configure_event_publisher(None)
+
+    asyncio.run(scenario())
+
+
+def test_observer_publishes_interrupt_required_instead_of_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.bus-interrupt", include_stdout=False)
+        bus = SessionEventBus(loop=asyncio.get_running_loop())
+        configure_event_publisher(bus.publish_threadsafe)
+        subscription = bus.subscribe("s")
+        bus.register_thread("s", "t")
+        try:
+            def interrupt(_: object) -> dict[str, object]:
+                raise GraphInterrupt()
+
+            with pytest.raises(GraphInterrupt):
+                observe_node("interview_await_answer", "control", interrupt, logger)({}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+            first = await asyncio.wait_for(subscription.next_event(), timeout=1)
+            second = await asyncio.wait_for(subscription.next_event(), timeout=1)
+
+            assert [first["event"], second["event"]] == ["node_started", "interrupt_required"]
+        finally:
+            configure_event_publisher(None)
+
+    asyncio.run(scenario())
+
+
+def test_observer_publishes_node_retrying_from_retryable_error_entry(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.bus-retrying", include_stdout=False)
+        bus = SessionEventBus(loop=asyncio.get_running_loop())
+        configure_event_publisher(bus.publish_threadsafe)
+        subscription = bus.subscribe("s")
+        bus.register_thread("s", "t")
+        entry = {
+            "code": "LLM_SCHEMA_INVALID",
+            "node": "jd_parser",
+            "message": "schema invalid",
+            "retryable": True,
+            "attempt": 1,
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "raw_output_excerpt": None,
+        }
+        try:
+            observe_node("jd_parser", "agent", lambda _: {"error_log": [entry]}, logger)({}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+            events = [await asyncio.wait_for(subscription.next_event(), timeout=1) for _ in range(3)]
+
+            assert [event["event"] for event in events] == ["node_started", "node_retrying", "node_finished"]
+            assert [event["session_sequence"] for event in events] == [1, 2, 3]
+        finally:
+            configure_event_publisher(None)
+
+    asyncio.run(scenario())
+
+
+def test_observer_silently_degrades_when_event_bus_publish_fails(tmp_path: Path) -> None:
+    logger = configure_structured_logger(log_dir=tmp_path, logger_name="test.observability.bus-failure", include_stdout=False)
+
+    def failing_publisher(_: dict[str, object]) -> None:
+        raise RuntimeError("event bus unavailable")
+
+    configure_event_publisher(failing_publisher)
+    try:
+        update = observe_node("supervisor", "agent", lambda _: {"ok": True}, logger)({"user_input": "x"}, {"configurable": {"session_id": "s", "thread_id": "t"}})
+        _flush(logger)
+        events = [json.loads(line)["event"] for line in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8").splitlines()]
+
+        assert update == {"ok": True}
+        assert events == ["agent_node_started", "agent_node_finished"]
+    finally:
+        configure_event_publisher(None)
 
 
 def _flush(logger: logging.Logger) -> None:

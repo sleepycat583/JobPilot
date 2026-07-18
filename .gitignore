@@ -12,3 +12,4 @@ __pycache__/
 .venv-clean/
 data/chroma/
 logs/
+git_log_full.txt

@@ -37,12 +37,14 @@ Week3 详细规划书。
 6. Week3 任务顺序按优先级采用：**SSE → React骨架 → SQLAlchemy → interrupt表单**。
 7. 不修改 Graph 拓扑、Agent 业务逻辑、HITL/Checkpoint 恢复机制。
 
-## 三、尚未决策的开放问题
+## 三、尚未决策的开放问题（已解决，已通过 ADR-001 冻结）
 
-1. 异步启动端点的具体路径命名、请求结构、响应结构与状态码。
-2. 内存事件缓冲的具体保留时长、最大条数、清理策略。
-3. `session -> 多 thread` 事件多路复用在当前 FastAPI + asyncio 模型下的具体实现方式与并发边界。
-4. `node_retrying` / `run_failed` / `run_completed` 是否可直接由现有 `retry_count`、`ErrorEntry`、API 500 处理和 Graph 终态派生，还是需要额外统一机制。
+> 历史记录保留如下，当前 1-4 项均已通过 `docs/adr-001-async-task-and-sse-contract.md` 冻结，不再作为开放问题讨论。
+
+1. 异步启动端点的具体路径命名、请求结构、响应结构与状态码。**已通过 ADR-001 冻结：新增 `POST /api/tasks`，返回 `202 Accepted` 与 `{session_id, thread_id, status:"accepted"}`。**
+2. 内存事件缓冲的具体保留时长、最大条数、清理策略。**已通过 ADR-001 冻结：每个 `thread_id` 保留最近 60 秒或最近 50 条事件（取先到者）。**
+3. `session -> 多 thread` 事件多路复用在当前 FastAPI + asyncio 模型下的具体实现方式与并发边界。**已通过 ADR-001 冻结：采用 `thread` 级缓冲 + `session` 级广播、正反向索引、`loop.call_soon_threadsafe(...)` 回主事件循环发布。**
+4. `node_retrying` / `run_failed` / `run_completed` 是否可直接由现有 `retry_count`、`ErrorEntry`、API 500 处理和 Graph 终态派生，还是需要额外统一机制。**已通过 ADR-001 冻结：全部复用现有信号派生，不新增机制。**
 
 ## 四、剩余任务分解（按依赖顺序）
 
@@ -66,7 +68,7 @@ Week3 详细规划书。
 | Task | 状态 |
 |---|---|
 | Task 0 / SSE 第一轮调研 | 已完成 |
-| Task 1 | 等待决策确认 |
+| Task 1 | 已完成（ADR-001 已冻结异步启动与 SSE 契约） |
 | Task 2-4 | 等待前置任务 |
 | Task 5 | 未开始 |
 | Task 6 | 未开始 |

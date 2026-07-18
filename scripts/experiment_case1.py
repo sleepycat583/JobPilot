@@ -78,8 +78,14 @@ def _baseline_prompt(jd_text: str) -> str:
     return (
         "You are a single-agent JD parser. Return only JSON matching JDParsed. "
         "Extract the job title, seniority, responsibilities, skills, experience, education, interview focus, ambiguities, and source language. "
-        "For every skill, evidence must be a short quote that can be located verbatim in the original JD text. "
-        "Use priority=must only for explicit hard requirements; use preferred for 优先 or 加分; use inferred only for clear implications. "
+        "Return raw JSON only, with no markdown code fences, no ```json wrapper, and no explanatory text before or after the JSON object. "
+        "\n"
+        "Field constraints:\n"
+        "- seniority must be exactly one of: intern, junior, mid, senior, lead, unknown — do not use free-text experience descriptions like '3年及以上' for this field.\n"
+        "- For each skill: category must be exactly one of: language, framework, database, cloud, engineering, domain, soft_skill\n"
+        "- For each skill: priority must be exactly one of: must, preferred, inferred — use 'must' only for explicit hard requirements; use 'preferred' for 优先 or 加分; use 'inferred' only for clear implications.\n"
+        "- For each skill: evidence must be a short quote that can be located verbatim in the original JD text.\n"
+        "\n"
         "Do not call tools or use external context.\n"
         f"JD text:\n{jd_text}"
     )

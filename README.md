@@ -1,6 +1,6 @@
 # Job Assistant
 
-基于 LangGraph Supervisor-Worker 架构的求职辅助系统。已完成 JD 结构化解析、基于 Chroma 证据的简历匹配、确定性评分、低分审核 Gate 和 Graph 原生有序任务队列，并通过 FastAPI HTTP 边界提供可测试的调用入口。
+基于 LangGraph Supervisor-Worker 架构的求职辅助系统。已完成 JD 结构化解析、基于 Chroma 证据的简历匹配、确定性评分、低分审核 Gate、模拟面试与最终核可、Graph 原生有序任务队列，并通过 FastAPI HTTP、异步任务和 SSE 事件流提供可测试的调用入口。
 
 ## 当前状态
 
@@ -14,8 +14,10 @@
 
 后续范围或当前占位：
 
-- 模拟面试当前已具备可恢复的 HITL 骨架：初始化等待问题、补充背景、提交回答、结束会话；完整出题/评价/复盘逻辑仍留在第④步。rolling summary、结构化日志装饰器与更完整的面试流程仍待实现；最终产物仅在人工最终核可后由 `finalize_node` 格式化，不生成额外 LLM 报告文本。
-- SQLAlchemy 业务存储、SSE、React UI、Docker Compose 与生产交付。
+- 模拟面试主流程已实现：面试计划、问题生成、回答评价、rolling summary、复盘报告生成、降级处理和最终人工核可均已接入 Graph；完整浏览器端 interrupt 交互表单、刷新恢复和重复提交幂等的端到端验证仍未完成。
+- 已实现基础 SSE 节点级实时进度展示和 React/Vite 进度骨架；HITL 交互表单尚未接入，SSE 断线补发/`Last-Event-ID` 尚未实现。
+- 使用 SQLAlchemy + Alembic 管理业务 SQLite Schema，建立可追踪的 migration 版本链，并实际验证空数据库初始化、已有数据库 upgrade 和失败恢复不破坏现有业务数据。
+- Docker Compose、生产交付和前端端到端自动化测试仍未完成。
 
 ## 本地运行
 
@@ -54,4 +56,7 @@ pytest -q
 - Chroma 当前只校验 collection metadata 中的 embedding 模型名和维度，未对运行时向量长度做额外校验。
 - 简历切分是规则式文本处理：仅支持有限的中英文标题别名；experience/project 没有显式标签或日期范围时会保守合并，避免误切分。
 - 索引目录入口只读取顶层 UTF-8 `.txt` 文件，不支持 PDF/DOCX、递归目录或其他文本编码。
-- 面试的完整出题/评价/复盘流程、SSE、React、SQLAlchemy 和 Docker 尚未实现，不应作为可用功能对外承诺。
+- 面试浏览器端 interrupt 表单、刷新恢复和 resume 重复提交幂等尚未完成。
+- SSE 当前仅提供基础事件流和节点级实时进度展示，尚未完成 `Last-Event-ID` 断线补发及异常网络测试。
+- Alembic 迁移链已验证空库初始化、已有数据库 upgrade、重复 upgrade、重复采样键失败回滚和 Checkpoint 隔离；历史归档导入按 `architecture` 重编号并保留 source id 映射，源归档文件保持只读。
+- 当前真实实验归档仅覆盖 `case1_simple_python_backend_jd`；Case2（跨语言简历匹配）和 Case3（复杂多轮模拟面试）尚无真实 LLM 实验记录。

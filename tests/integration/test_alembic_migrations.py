@@ -48,7 +48,7 @@ def test_alembic_upgrade_creates_business_tables(project_root: Path, tmp_path: P
 
     assert "experiment_runs" in tables
     assert "review_audits" in tables
-    assert revision == "20260719_0001"
+    assert revision == "20260720_0002"
     assert not checkpoint_path.exists()
 
 
@@ -76,7 +76,7 @@ def test_alembic_upgrade_is_repeatable_for_existing_business_database(project_ro
     finally:
         engine.dispose()
 
-    assert revision == "20260719_0001"
+    assert revision == "20260720_0002"
 
 
 @pytest.mark.core_agent_tests
@@ -123,11 +123,11 @@ def test_alembic_failed_follow_up_upgrade_preserves_existing_business_rows(
 
     broken_migrations = tmp_path / "broken_migrations"
     shutil.copytree(project_root / "migrations", broken_migrations)
-    (broken_migrations / "versions" / "20260720_0002_failure_probe.py").write_text(
+    (broken_migrations / "versions" / "20260720_0003_failure_probe.py").write_text(
         """\"\"\"Temporary migration failure probe.\"\"\"
 
-revision = "20260720_0002"
-down_revision = "20260719_0001"
+revision = "20260720_0003"
+down_revision = "20260720_0002"
 branch_labels = None
 depends_on = None
 
@@ -160,5 +160,73 @@ def downgrade() -> None:
         engine.dispose()
 
     assert row == ("existing-case", 99, "v-existing")
-    assert revision == "20260719_0001"
+    assert revision == "20260720_0002"
     assert not checkpoint_path.exists()
+
+
+@pytest.mark.core_agent_tests
+def test_alembic_unique_constraint_preserves_clean_existing_rows(
+    project_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """batch migration 应保留无冲突的既有行。"""
+
+    database_path = tmp_path / "app.sqlite3"
+    monkeypatch.setenv("MODEL_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("MODEL_NAME", "deepseek-chat")
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", "./data/chroma")
+    monkeypatch.setenv("SQLALCHEMY_DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
+    monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(tmp_path / "checkpoints.sqlite3"))
+    monkeypatch.setenv("EMBEDDING_DEVICE", "cpu")
+    config = _build_alembic_config(project_root, database_path)
+    command.upgrade(config, "20260719_0001")
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("INSERT INTO experiment_runs (case_name,architecture,run_index,model_name,prompt_version,status,schema_valid,llm_calls,estimated_tokens,latency_ms,error_codes,created_at) VALUES ('case1','baseline',1,'model','v1','success',1,1,1,1.0,'[]','2026-01-01T00:00:00+00:00')"))
+    finally:
+        engine.dispose()
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT COUNT(*) FROM experiment_runs")).scalar_one() == 1
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20260720_0002"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.core_agent_tests
+def test_alembic_unique_constraint_failure_preserves_duplicate_source_rows(
+    project_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """batch migration 遇到历史重复五元组时应失败且保留原表数据。"""
+
+    database_path = tmp_path / "app.sqlite3"
+    monkeypatch.setenv("MODEL_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("MODEL_NAME", "deepseek-chat")
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", "./data/chroma")
+    monkeypatch.setenv("SQLALCHEMY_DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
+    monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(tmp_path / "checkpoints.sqlite3"))
+    monkeypatch.setenv("EMBEDDING_DEVICE", "cpu")
+    config = _build_alembic_config(project_root, database_path)
+    command.upgrade(config, "20260719_0001")
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.begin() as connection:
+            for _ in range(2):
+                connection.execute(text("INSERT INTO experiment_runs (case_name,architecture,run_index,model_name,prompt_version,status,schema_valid,llm_calls,estimated_tokens,latency_ms,error_codes,created_at) VALUES ('case1','baseline',1,'model','v1','success',1,1,1,1.0,'[]','2026-01-01T00:00:00+00:00')"))
+    finally:
+        engine.dispose()
+    with pytest.raises(Exception):
+        command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT COUNT(*) FROM experiment_runs")).scalar_one() == 2
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20260719_0001"
+    finally:
+        engine.dispose()

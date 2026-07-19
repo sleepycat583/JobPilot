@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Float, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -26,6 +26,10 @@ class ExperimentRun(Base):
     __tablename__ = "experiment_runs"
     __table_args__ = (
         CheckConstraint("status IN ('success', 'degraded', 'failed')", name="ck_experiment_runs_status"),
+        UniqueConstraint(
+            "case_name", "architecture", "model_name", "prompt_version", "run_index",
+            name="uq_experiment_runs_sampling_key",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

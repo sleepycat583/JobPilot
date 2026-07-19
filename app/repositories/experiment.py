@@ -10,9 +10,16 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import ExperimentRun
+
+
+class ExperimentRunAlreadyExistsError(ValueError):
+    """表示同一实验采样五元组已经存在，调用方必须显式决定如何处理。"""
+
+    code = "EXPERIMENT_RUN_ALREADY_EXISTS"
 
 
 class ExperimentRunRepository:
@@ -32,12 +39,18 @@ class ExperimentRunRepository:
     def create_run(self, row: Mapping[str, Any]) -> ExperimentRun:
         """持久化一次实验运行记录。"""
 
+        key = {
+            "case_name": str(row["case_name"]),
+            "architecture": str(row["architecture"]),
+            "model_name": str(row["model_name"]),
+            "prompt_version": str(row["prompt_version"]),
+            "run_index": int(row["run_index"]),
+        }
+        if self._session.scalar(select(ExperimentRun).filter_by(**key)) is not None:
+            raise ExperimentRunAlreadyExistsError(f"{ExperimentRunAlreadyExistsError.code}: {key}")
+
         entity = ExperimentRun(
-            case_name=str(row["case_name"]),
-            architecture=str(row["architecture"]),
-            run_index=int(row["run_index"]),
-            model_name=str(row["model_name"]),
-            prompt_version=str(row["prompt_version"]),
+            **key,
             status=str(row["status"]),
             schema_valid=bool(row["schema_valid"]),
             unsupported_skill_claims=(None if row.get("unsupported_skill_claims") is None else int(row["unsupported_skill_claims"])),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -76,3 +77,88 @@ def test_alembic_upgrade_is_repeatable_for_existing_business_database(project_ro
         engine.dispose()
 
     assert revision == "20260719_0001"
+
+
+@pytest.mark.core_agent_tests
+def test_alembic_failed_follow_up_upgrade_preserves_existing_business_rows(
+    project_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已有业务数据在后续迁移失败后必须保持完整且版本不能静默推进。"""
+
+    database_path = tmp_path / "app.sqlite3"
+    checkpoint_path = tmp_path / "checkpoints.sqlite3"
+    monkeypatch.setenv("MODEL_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("MODEL_NAME", "deepseek-chat")
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", "./data/chroma")
+    monkeypatch.setenv("SQLALCHEMY_DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
+    monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(checkpoint_path))
+    monkeypatch.setenv("EMBEDDING_DEVICE", "cpu")
+
+    config = _build_alembic_config(project_root, database_path)
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO experiment_runs (
+                        case_name, architecture, run_index, model_name, prompt_version,
+                        status, schema_valid, unsupported_skill_claims, llm_calls,
+                        estimated_tokens, latency_ms, error_codes, output_json, created_at
+                    ) VALUES (
+                        'existing-case', 'baseline', 99, 'test-model', 'v-existing',
+                        'success', 1, 0, 1, 1, 1.5, '[]', '{}', '2026-07-20T00:00:00+00:00'
+                    )
+                    """
+                )
+            )
+    finally:
+        engine.dispose()
+
+    broken_migrations = tmp_path / "broken_migrations"
+    shutil.copytree(project_root / "migrations", broken_migrations)
+    (broken_migrations / "versions" / "20260720_0002_failure_probe.py").write_text(
+        """\"\"\"Temporary migration failure probe.\"\"\"
+
+revision = "20260720_0002"
+down_revision = "20260719_0001"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    raise RuntimeError("INTENTIONAL_MIGRATION_FAILURE")
+
+
+def downgrade() -> None:
+    pass
+""",
+        encoding="utf-8",
+    )
+    broken_config = _build_alembic_config(project_root, database_path)
+    broken_config.set_main_option("script_location", str(broken_migrations))
+
+    with pytest.raises(RuntimeError, match="INTENTIONAL_MIGRATION_FAILURE"):
+        command.upgrade(broken_config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT case_name, run_index, prompt_version FROM experiment_runs WHERE case_name = 'existing-case'"
+                )
+            ).one()
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert row == ("existing-case", 99, "v-existing")
+    assert revision == "20260719_0001"
+    assert not checkpoint_path.exists()

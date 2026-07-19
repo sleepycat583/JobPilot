@@ -15,12 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.agents.jd_parser import CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE, jd_parser_node
 from app.db import Base, build_session_factory, create_sqlalchemy_engine
+from app.db.models import ExperimentRun
 from app.config import load_settings
 from app.providers.chat_model import build_chat_model
 from app.repositories.experiment import ExperimentRunRepository
@@ -148,7 +151,16 @@ def run_case1_experiment(
     session_factory = build_session_factory(engine)
     try:
         for architecture, runner in (("baseline", _run_baseline), ("multi_agent", _run_multi_agent)):
-            for run_index in range(1, repeats + 1):
+            prefix = (
+                ExperimentRun.case_name == CASE_NAME,
+                ExperimentRun.architecture == architecture,
+                ExperimentRun.model_name == model_name,
+                ExperimentRun.prompt_version == PROMPT_VERSION,
+            )
+            with session_factory() as session:
+                current_max = session.scalar(select(func.max(ExperimentRun.run_index)).where(*prefix)) or 0
+            for offset in range(1, repeats + 1):
+                run_index = current_max + offset
                 start = time.perf_counter()
                 status, schema_valid, parsed, error_codes, llm_calls, estimated_tokens = runner(chat_model, jd_text)
                 row: dict[str, object] = {

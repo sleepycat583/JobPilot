@@ -65,3 +65,25 @@ def test_case1_experiment_smoke_writes_baseline_and_multi_agent_runs(tmp_path: P
         ).fetchall()
     engine.dispose()
     assert rows == [("baseline", 3, 1, 1), ("multi_agent", 3, 1, 1)]
+
+
+def test_case1_experiment_continues_run_index_for_existing_prefix(tmp_path: Path) -> None:
+    module = _load_experiment_module()
+    database_path = tmp_path / "experiments.sqlite3"
+
+    first_records = module.run_case1_experiment(
+        FakeChatModel(),
+        database_path=database_path,
+        model_name="fake-model",
+        repeats=2,
+    )
+    second_records = module.run_case1_experiment(
+        FakeChatModel(),
+        database_path=database_path,
+        model_name="fake-model",
+        repeats=2,
+    )
+
+    assert [record["run_index"] for record in first_records if record["architecture"] == "baseline"] == [1, 2]
+    assert [record["run_index"] for record in second_records if record["architecture"] == "baseline"] == [3, 4]
+    assert [record["run_index"] for record in second_records if record["architecture"] == "multi_agent"] == [3, 4]

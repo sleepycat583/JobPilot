@@ -11,21 +11,25 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.types import Command
+from sqlalchemy.orm import Session, sessionmaker
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings, load_settings, run_startup_self_check
 from app.constants import MAX_INPUT_LENGTH
+from app.db import build_session_factory, create_sqlalchemy_engine, ensure_database_paths_are_isolated
 from app.graph.builder import build_graph
 from app.graph.checkpoint import open_sqlite_checkpointer
 from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
+from app.repositories.review_audit import ReviewAuditRepository
 from app.schemas.review import HITLCommand
 from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
 from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger
@@ -58,6 +62,7 @@ class AppDependencies:
     """FastAPI 运行所需的已装配依赖。"""
 
     graph: Any
+    session_factory: sessionmaker[Session] | None = None
     close: Callable[[], None] | None = None
 
 
@@ -75,13 +80,22 @@ def build_dependencies(settings: Settings) -> AppDependencies:
     """
 
     run_startup_self_check(settings)
+    ensure_database_paths_are_isolated(settings.sqlalchemy_database_url, settings.langgraph_checkpoint_path)
     chat_model = build_chat_model(settings)
     embedding_model = build_embedding_model(settings)
     resume_store = ChromaResumeStore(settings, embedding_model)
-    checkpointer, connection = open_sqlite_checkpointer("./data/checkpoints.sqlite3")
+    checkpointer, connection = open_sqlite_checkpointer(settings.langgraph_checkpoint_path)
+    engine = create_sqlalchemy_engine(settings.sqlalchemy_database_url)
+    session_factory = build_session_factory(engine)
+
+    def _close() -> None:
+        connection.close()
+        engine.dispose()
+
     return AppDependencies(
         graph=build_graph(chat_model, resume_store=resume_store, checkpointer=checkpointer),
-        close=connection.close,
+        session_factory=session_factory,
+        close=_close,
     )
 
 
@@ -192,9 +206,13 @@ def create_app(
 
         async def event_stream():
             try:
-                async for event in subscription.iter_events():
+                while True:
                     if await request.is_disconnected():
                         break
+                    try:
+                        event = await asyncio.wait_for(subscription.next_event(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
                     yield _format_sse_event(event)
             except SessionSubscriptionClosed:
                 return
@@ -221,6 +239,27 @@ def create_app(
             return _error_response(validated_command, status_code=422)
         session_id = _session_id_from_snapshot(snapshot)
         config["configurable"]["session_id"] = session_id
+        audit_id: int | None = None
+        if app.state.dependencies.session_factory is not None:
+            interrupt_payload = _extract_interrupt(snapshot)
+            with app.state.dependencies.session_factory() as session:
+                repository = ReviewAuditRepository(session)
+                try:
+                    audit = repository.create_submitted_audit(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        review_target=_review_target_from_interrupt(interrupt_payload),
+                        action=_command_action(validated_command),
+                        feedback=_command_feedback(validated_command),
+                        command_json=json.dumps(validated_command.model_dump(mode="json"), ensure_ascii=False),
+                        checkpoint_status_before=_checkpoint_status_before(snapshot),
+                    )
+                except Exception:
+                    return _error_response(
+                        ApiError(code="REVIEW_AUDIT_PERSISTENCE_FAILED", message="Failed to persist review audit before resume"),
+                        status_code=500,
+                    )
+                audit_id = audit.id
         configure_structured_logger().info(
             build_log_event(
                 event="run_resumed", session_id=session_id, thread_id=thread_id,
@@ -230,10 +269,12 @@ def create_app(
         try:
             state = graph.invoke(Command(resume=validated_command.model_dump()), config=config)
         except Exception:
+            _mark_review_audit_failed(app.state.dependencies.session_factory, audit_id)
             return _error_response(
                 ApiError(code="GRAPH_EXECUTION_FAILED", message="Interrupted graph resume failed"),
                 status_code=500,
             )
+        _mark_review_audit_succeeded(app.state.dependencies.session_factory, audit_id)
         return _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
 
     return app
@@ -365,6 +406,74 @@ def _validate_hitl_command(command: dict[str, Any], snapshot: Any) -> HITLComman
     if validated.type != interrupt_type:
         return ApiError(code="HITL_COMMAND_TYPE_MISMATCH", message="Command type does not match the interrupted HITL node")
     return validated
+
+
+def _command_action(command: HITLCommand) -> str:
+    """提取当前 HITL 命令的动作字段。"""
+
+    return str(getattr(command, "action"))
+
+
+def _command_feedback(command: HITLCommand) -> str | None:
+    """提取审计需要的反馈字段。
+
+    为什么这样做：
+        只有显式反馈字段应写入 `feedback` 列；面试回答和上下文补充属于命令载荷，
+        已由 `command_json` 完整保存，不应混入审核反馈语义。
+    """
+
+    feedback = getattr(command, "feedback", None)
+    if isinstance(feedback, str) and feedback.strip():
+        return feedback
+    return None
+
+
+def _review_target_from_interrupt(interrupt_payload: dict[str, Any] | None) -> str:
+    """从 interrupt payload 提取审核目标。"""
+
+    if isinstance(interrupt_payload, dict):
+        target = interrupt_payload.get("target")
+        if isinstance(target, str) and target:
+            return target
+    return "unknown"
+
+
+def _checkpoint_status_before(snapshot: Any) -> str | None:
+    """读取恢复前 checkpoint 中的 `review_status`。"""
+
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, dict):
+        status = values.get("review_status")
+        return status if isinstance(status, str) and status else None
+    return None
+
+
+def _mark_review_audit_succeeded(session_factory: sessionmaker[Session] | None, audit_id: int | None) -> None:
+    """把审计记录标记为成功完成。"""
+
+    if session_factory is None or audit_id is None:
+        return
+    with session_factory() as session:
+        ReviewAuditRepository(session).mark_completed(
+            audit_id,
+            result="succeeded",
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
+def _mark_review_audit_failed(session_factory: sessionmaker[Session] | None, audit_id: int | None) -> None:
+    """把审计记录标记为恢复失败。"""
+
+    if session_factory is None or audit_id is None:
+        return
+    with session_factory() as session:
+        ReviewAuditRepository(session).mark_completed(
+            audit_id,
+            result="failed",
+            result_code="GRAPH_EXECUTION_FAILED",
+            error_message="Interrupted graph resume failed",
+            completed_at=datetime.now(timezone.utc),
+        )
 
 
 def _build_analysis_input(request: JobAnalysisRequest) -> str:

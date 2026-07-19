@@ -11,15 +11,20 @@ import asyncio
 import threading
 import json
 import time
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import httpx
 import pytest
+from fastapi import Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
+from sqlalchemy import create_engine, text
 
 from app.api import AppDependencies, create_app
+from app.db import Base, build_session_factory, create_sqlalchemy_engine
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
 
@@ -149,6 +154,43 @@ def _client_for(
     return TestClient(create_app(dependencies=AppDependencies(graph=graph)))
 
 
+def _client_with_business_db(tmp_path: Path, **kwargs: Any) -> tuple[TestClient, Path]:
+    """创建带业务 SQLite Session 的测试客户端。"""
+
+    database_path = tmp_path / "app.sqlite3"
+    engine = create_sqlalchemy_engine(f"sqlite:///{database_path.as_posix()}")
+    Base.metadata.create_all(engine)
+    responses = [_route("jd_parse", kwargs.get("task_queue") or ["jd_parse", "resume_match"]), kwargs.get("jd_response", JD_PARSED_JSON)]
+    if kwargs.get("task_queue") != ["jd_parse"]:
+        responses.append(_match_analysis(kwargs.get("responsibility_relevance", 0.4286)))
+    model = FakeChatModel(responses + (kwargs.get("follow_up_responses") or []))
+    store = FakeResumeStore(
+        {
+            ("Java", "2026-07-v1"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+            ("API design", "2026-07-v1"): [
+                {
+                    "chunk_id": "api-1",
+                    "quote": f"API design {kwargs.get('responsibility_relevance', 0.4286)}",
+                    "relevance": kwargs.get("responsibility_relevance", 0.4286),
+                }
+            ],
+            ("3年以上后端开发经验", "2026-07-v1"): [{"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}],
+            ("Java", "2026-07-v2"): [{"chunk_id": "java-1", "quote": "Java", "relevance": 1.0}],
+            ("API design", "2026-07-v2"): [{"chunk_id": "api-1", "quote": "API design 1.0", "relevance": 1.0}],
+            ("3年以上后端开发经验", "2026-07-v2"): [{"chunk_id": "exp-1", "quote": "3 years", "relevance": 1.0}],
+        },
+        missing_versions=kwargs.get("missing_versions") or set(),
+    )
+    graph = build_graph(model, resume_store=store, checkpointer=MemorySaver())
+    dependencies = AppDependencies(
+        graph=graph,
+        session_factory=build_session_factory(engine),
+        close=engine.dispose,
+    )
+    client = TestClient(create_app(dependencies=dependencies))
+    return client, database_path
+
+
 @dataclass
 class BlockingGraph:
     release: threading.Event
@@ -213,14 +255,37 @@ async def test_api_tasks_returns_202_without_waiting_for_graph_completion() -> N
     assert elapsed_ms < 200
 
 
-async def _async_read_stream_until(stream: httpx.Response, marker: str) -> str:
+def _sse_endpoint(app: Any) -> Any:
+    """取得 session SSE 路由端点，供持续响应测试直接消费迭代器。"""
+
+    return next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/sessions/{session_id}/events"
+    )
+
+
+def _sse_request() -> Request:
+    """创建保持连接状态的最小 ASGI 请求，供 SSE 端点检测断连。"""
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": []}, receive=receive)
+
+
+async def _async_read_sse_until(app: Any, session_id: str, marker: str) -> tuple[StreamingResponse, str]:
+    """直接消费 SSE 响应直到出现标记，不等待 session 级长连接自然结束。"""
+
+    response = await _sse_endpoint(app)(session_id, _sse_request())
+    assert isinstance(response, StreamingResponse)
     body_parts: list[str] = []
-    async for chunk in stream.aiter_text():
-        body_parts.append(chunk)
+    while True:
+        chunk = await asyncio.wait_for(anext(response.body_iterator), timeout=1)
+        body_parts.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
         current = "".join(body_parts)
         if marker in current:
-            return current
-    return "".join(body_parts)
+            return response, current
 
 
 @pytest.mark.asyncio
@@ -232,9 +297,8 @@ async def test_api_tasks_sse_replays_node_lifecycle_events_for_same_thread() -> 
             accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
             session_id = accepted.json()["session_id"]
             thread_id = accepted.json()["thread_id"]
-
-            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
-                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"node_finished"'), timeout=1)
+        response, body = await _async_read_sse_until(app, session_id, '"event":"node_finished"')
+        await response.body_iterator.aclose()
 
     assert accepted.status_code == 202
     assert f'"event":"node_started"' in body
@@ -250,9 +314,8 @@ async def test_api_tasks_sse_receives_run_failed_when_graph_raises() -> None:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
             session_id = accepted.json()["session_id"]
-
-            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
-                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"run_failed"'), timeout=1)
+        response, body = await _async_read_sse_until(app, session_id, '"event":"run_failed"')
+        await response.body_iterator.aclose()
 
     assert accepted.status_code == 202
     assert '"event":"run_failed"' in body
@@ -266,9 +329,8 @@ async def test_api_tasks_sse_receives_run_completed_when_final_output_exists() -
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
             session_id = accepted.json()["session_id"]
-
-            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
-                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"run_completed"'), timeout=1)
+        response, body = await _async_read_sse_until(app, session_id, '"event":"run_completed"')
+        await response.body_iterator.aclose()
 
     assert accepted.status_code == 202
     assert '"event":"run_completed"' in body
@@ -312,6 +374,49 @@ def test_resume_recovers_checkpoint_session_without_client_header() -> None:
 
     assert response.status_code == 200
     assert response.json()["session_id"] == session_id
+
+
+def test_resume_persists_review_audit_for_approve_action(tmp_path: Path) -> None:
+    client, database_path = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        session_id = initial.json()["session_id"]
+        response = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+
+    assert response.status_code == 200
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT session_id, thread_id, review_target, action, result FROM review_audits")
+            ).mappings().one()
+    finally:
+        engine.dispose()
+
+    assert row["session_id"] == session_id
+    assert row["thread_id"] == thread_id
+    assert row["review_target"] == "jd_parsed"
+    assert row["action"] == "approve"
+    assert row["result"] == "succeeded"
+
+
+def test_resume_invalid_command_does_not_persist_review_audit(tmp_path: Path) -> None:
+    client, database_path = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        response = client.post(f"/v1/threads/{thread_id}/resume", json={"action": "reject"})
+
+    assert response.status_code == 422
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            count = connection.execute(text("SELECT COUNT(*) FROM review_audits")).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert count == 0
 
 
 def test_job_analysis_combines_jd_parse_and_resume_match() -> None:

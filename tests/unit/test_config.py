@@ -16,6 +16,8 @@ def _clear_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MODEL_NAME",
         "API_KEY",
         "CHROMA_PERSIST_DIR",
+        "SQLALCHEMY_DATABASE_URL",
+        "LANGGRAPH_CHECKPOINT_PATH",
         "EMBEDDING_DEVICE",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -57,6 +59,8 @@ def test_load_settings_succeeds_when_all_required_fields_exist(monkeypatch: pyte
     assert settings.model_name == "deepseek-chat"
     assert settings.api_key == "test-key"
     assert settings.chroma_persist_dir == "./data/chroma"
+    assert settings.sqlalchemy_database_url == "sqlite:///./data/app.sqlite3"
+    assert settings.langgraph_checkpoint_path == "./data/checkpoints.sqlite3"
     assert settings.embedding_device == "cpu"
     assert settings.log_dir == "./logs"
     assert settings.log_level == "INFO"
@@ -72,6 +76,8 @@ def test_startup_self_check_fails_for_blank_values() -> None:
         model_name="deepseek-chat",
         api_key="   ",
         chroma_persist_dir=str(Path("./data/chroma")),
+        sqlalchemy_database_url="sqlite:///./data/app.sqlite3",
+        langgraph_checkpoint_path="./data/checkpoints.sqlite3",
         embedding_device="cpu",
     )
 

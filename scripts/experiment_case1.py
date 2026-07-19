@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
@@ -21,8 +20,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.agents.jd_parser import CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE, jd_parser_node
+from app.db import Base, build_session_factory, create_sqlalchemy_engine
 from app.config import load_settings
 from app.providers.chat_model import build_chat_model
+from app.repositories.experiment import ExperimentRunRepository
 from app.schemas.jd import JDParsed
 from app.services.structured_output import StructuredPromptContext, call_with_structured_output
 
@@ -97,53 +98,6 @@ def _unsupported_skill_claim_count(parsed: JDParsed, jd_text: str) -> int:
     return sum(not skill.evidence.strip() or skill.evidence not in jd_text for skill in parsed.skills)
 
 
-def _initialize_database(connection: sqlite3.Connection) -> None:
-    """创建 Week2 最小实验运行表；人工评分表留给 Week4 正式实验。"""
-
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS experiment_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            case_name TEXT NOT NULL,
-            architecture TEXT NOT NULL,
-            run_index INTEGER NOT NULL,
-            model_name TEXT NOT NULL,
-            prompt_version TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('success', 'degraded', 'failed')),
-            schema_valid INTEGER NOT NULL CHECK (schema_valid IN (0, 1)),
-            unsupported_skill_claims INTEGER,
-            llm_calls INTEGER NOT NULL,
-            estimated_tokens INTEGER NOT NULL,
-            latency_ms REAL NOT NULL,
-            error_codes TEXT NOT NULL,
-            output_json TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    connection.commit()
-
-
-def _write_run(connection: sqlite3.Connection, row: dict[str, object]) -> None:
-    """持久化一次实验运行，保留可审计状态、指标和结构化输出。"""
-
-    connection.execute(
-        """
-        INSERT INTO experiment_runs (
-            case_name, architecture, run_index, model_name, prompt_version, status,
-            schema_valid, unsupported_skill_claims, llm_calls, estimated_tokens,
-            latency_ms, error_codes, output_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            row["case_name"], row["architecture"], row["run_index"], row["model_name"], row["prompt_version"], row["status"],
-            row["schema_valid"], row["unsupported_skill_claims"], row["llm_calls"], row["estimated_tokens"],
-            row["latency_ms"], row["error_codes"], row["output_json"], row["created_at"],
-        ),
-    )
-    connection.commit()
-
-
 def _run_baseline(chat_model: Any, jd_text: str) -> tuple[str, bool, JDParsed | None, list[str], int, int]:
     """运行单 Prompt baseline，返回状态、校验结果、产物、错误码及调用/Token统计。"""
 
@@ -185,12 +139,14 @@ def run_case1_experiment(
     repeats: int = RUNS_PER_ARCHITECTURE,
     jd_text: str = CASE1_JD,
 ) -> list[dict[str, object]]:
-    """运行 Case 1 的两组对照并写入 SQLite，返回本轮运行记录供汇总或测试使用。"""
+    """运行 Case 1 的两组对照并写入业务 SQLite，返回本轮运行记录供汇总或测试使用。"""
 
     database_path.parent.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, object]] = []
-    with sqlite3.connect(database_path) as connection:
-        _initialize_database(connection)
+    engine = create_sqlalchemy_engine(f"sqlite:///{database_path.as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+    try:
         for architecture, runner in (("baseline", _run_baseline), ("multi_agent", _run_multi_agent)):
             for run_index in range(1, repeats + 1):
                 start = time.perf_counter()
@@ -209,10 +165,13 @@ def run_case1_experiment(
                     "latency_ms": round((time.perf_counter() - start) * 1000, 2),
                     "error_codes": json.dumps(error_codes, ensure_ascii=False),
                     "output_json": json.dumps(parsed.model_dump(mode="json"), ensure_ascii=False) if parsed else None,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(timezone.utc),
                 }
-                _write_run(connection, row)
+                with session_factory() as session:
+                    ExperimentRunRepository(session).create_run(row)
                 records.append(row)
+    finally:
+        engine.dispose()
     return records
 
 

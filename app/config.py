@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     model_name: str
     api_key: str
     chroma_persist_dir: str
+    sqlalchemy_database_url: str = "sqlite:///./data/app.sqlite3"
+    langgraph_checkpoint_path: str = "./data/checkpoints.sqlite3"
     embedding_device: str
     log_dir: str = "./logs"
     log_level: str = "INFO"
@@ -40,6 +42,8 @@ class Settings(BaseSettings):
         "model_name",
         "api_key",
         "chroma_persist_dir",
+        "sqlalchemy_database_url",
+        "langgraph_checkpoint_path",
         "embedding_device",
         "log_dir",
         "log_level",
@@ -102,6 +106,8 @@ def run_startup_self_check(settings: Settings) -> None:
             "model_name",
             "api_key",
             "chroma_persist_dir",
+            "sqlalchemy_database_url",
+            "langgraph_checkpoint_path",
             "embedding_device",
             "log_dir",
             "log_level",

@@ -2,9 +2,10 @@
 
 import importlib.util
 import json
-import sqlite3
 import sys
 from pathlib import Path
+
+from sqlalchemy import create_engine, text
 
 
 def _load_experiment_module():
@@ -57,8 +58,10 @@ def test_case1_experiment_smoke_writes_baseline_and_multi_agent_runs(tmp_path: P
     assert {record["architecture"] for record in records} == {"baseline", "multi_agent"}
     assert {record["status"] for record in records} == {"success"}
     assert "normal schema success" in module.format_summary(records)
-    with sqlite3.connect(database_path) as connection:
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    with engine.connect() as connection:
         rows = connection.execute(
-            "SELECT architecture, COUNT(*), MIN(schema_valid), MIN(llm_calls) FROM experiment_runs GROUP BY architecture"
+            text("SELECT architecture, COUNT(*), MIN(schema_valid), MIN(llm_calls) FROM experiment_runs GROUP BY architecture")
         ).fetchall()
+    engine.dispose()
     assert rows == [("baseline", 3, 1, 1), ("multi_agent", 3, 1, 1)]

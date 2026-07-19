@@ -7,10 +7,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import asyncio
+import threading
 import json
+import time
 from typing import Any
 from uuid import UUID
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -144,6 +149,32 @@ def _client_for(
     return TestClient(create_app(dependencies=AppDependencies(graph=graph)))
 
 
+@dataclass
+class BlockingGraph:
+    release: threading.Event
+    started: threading.Event
+
+    def invoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        del state, config
+        self.started.set()
+        self.release.wait(timeout=1)
+        return {"final_output": {"type": "jd_parsed"}}
+
+
+@dataclass
+class FailingGraph:
+    def invoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        del state, config
+        raise RuntimeError("boom")
+
+
+@dataclass
+class CompletedGraph:
+    def invoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        del state, config
+        return {"final_output": {"type": "jd_parsed"}}
+
+
 def test_job_analysis_parses_jd_through_http_boundary() -> None:
     with _client_for(task_queue=["jd_parse"]) as client:
         response = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
@@ -156,6 +187,91 @@ def test_job_analysis_parses_jd_through_http_boundary() -> None:
     assert payload["current_node"] == "prepare_final_review"
     assert payload["status"] == "interrupted"
     assert payload["interrupt"]["type"] == "final_review"
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_returns_202_without_waiting_for_graph_completion() -> None:
+    release = threading.Event()
+    started = threading.Event()
+    graph = BlockingGraph(release=release, started=started)
+    app = create_app(dependencies=AppDependencies(graph=graph))
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            started_at = time.perf_counter()
+            response = await asyncio.wait_for(client.post("/api/tasks", json={"jd_text": JD_TEXT}), timeout=0.2)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            assert started.wait(timeout=1) is True
+            release.set()
+
+    payload = response.json()
+    assert response.status_code == 202
+    assert payload["status"] == "accepted"
+    assert UUID(payload["session_id"]).version == 4
+    assert UUID(payload["thread_id"]).version == 4
+    assert elapsed_ms < 200
+
+
+async def _async_read_stream_until(stream: httpx.Response, marker: str) -> str:
+    body_parts: list[str] = []
+    async for chunk in stream.aiter_text():
+        body_parts.append(chunk)
+        current = "".join(body_parts)
+        if marker in current:
+            return current
+    return "".join(body_parts)
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_sse_replays_node_lifecycle_events_for_same_thread() -> None:
+    app = _client_for(task_queue=["jd_parse"]).app
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
+            session_id = accepted.json()["session_id"]
+            thread_id = accepted.json()["thread_id"]
+
+            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
+                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"node_finished"'), timeout=1)
+
+    assert accepted.status_code == 202
+    assert f'"event":"node_started"' in body
+    assert f'"event":"node_finished"' in body
+    assert f'"thread_id":"{thread_id}"' in body
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_sse_receives_run_failed_when_graph_raises() -> None:
+    app = create_app(dependencies=AppDependencies(graph=FailingGraph()))
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
+            session_id = accepted.json()["session_id"]
+
+            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
+                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"run_failed"'), timeout=1)
+
+    assert accepted.status_code == 202
+    assert '"event":"run_failed"' in body
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_sse_receives_run_completed_when_final_output_exists() -> None:
+    app = create_app(dependencies=AppDependencies(graph=CompletedGraph()))
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            accepted = await client.post("/api/tasks", json={"jd_text": JD_TEXT})
+            session_id = accepted.json()["session_id"]
+
+            async with client.stream("GET", f"/api/sessions/{session_id}/events") as stream:
+                body = await asyncio.wait_for(_async_read_stream_until(stream, '"event":"run_completed"'), timeout=1)
+
+    assert accepted.status_code == 202
+    assert '"event":"run_completed"' in body
 
 
 def test_job_analysis_generates_uuidv4_session_and_returns_it() -> None:

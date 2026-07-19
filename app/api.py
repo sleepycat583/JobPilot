@@ -7,13 +7,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Header
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Header, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,7 +27,8 @@ from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
 from app.schemas.review import HITLCommand
-from app.services.observability import build_log_event, configure_structured_logger
+from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
+from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger
 from pydantic import TypeAdapter, ValidationError
 
 
@@ -106,9 +109,18 @@ def create_app(
         else:
             app_settings = settings or load_settings()
             app.state.dependencies = dependency_factory(app_settings)
+        app.state.event_bus = SessionEventBus(loop=asyncio.get_running_loop())
+        app.state.background_tasks: set[asyncio.Task[Any]] = set()
+        configure_event_publisher(app.state.event_bus.publish_threadsafe)
         try:
             yield
         finally:
+            configure_event_publisher(None)
+            pending_tasks = list(app.state.background_tasks)
+            for task in pending_tasks:
+                task.cancel()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
             if app.state.dependencies.close is not None:
                 app.state.dependencies.close()
 
@@ -142,6 +154,54 @@ def create_app(
             )
 
         return _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
+
+    @app.post("/api/tasks")
+    async def create_task(request: JobAnalysisRequest, x_session_id: str | None = Header(default=None)) -> JSONResponse:
+        validation_error = _validate_request(request)
+        if validation_error is not None:
+            return _error_response(validation_error, status_code=422)
+
+        session_id = _resolve_session_id(x_session_id)
+        if session_id is None:
+            return _error_response(ApiError(code="SESSION_ID_INVALID", message="X-Session-ID must be a UUIDv4"), status_code=422)
+
+        thread_id = str(uuid4())
+        graph = app.state.dependencies.graph
+        event_bus = app.state.event_bus
+        event_bus.register_thread(session_id, thread_id)
+        task = asyncio.create_task(
+            _run_graph_in_background(
+                graph=graph,
+                event_bus=event_bus,
+                thread_id=thread_id,
+                session_id=session_id,
+                initial_state={
+                    "thread_id": thread_id,
+                    "user_input": _build_analysis_input(request),
+                    "resume_version": request.resume_version,
+                },
+                logger=configure_structured_logger(),
+            )
+        )
+        _track_background_task(app, task)
+        return JSONResponse(status_code=202, content={"session_id": session_id, "thread_id": thread_id, "status": "accepted"})
+
+    @app.get("/api/sessions/{session_id}/events")
+    async def stream_session_events(session_id: str, request: Request) -> StreamingResponse:
+        subscription = app.state.event_bus.subscribe(session_id)
+
+        async def event_stream():
+            try:
+                async for event in subscription.iter_events():
+                    if await request.is_disconnected():
+                        break
+                    yield _format_sse_event(event)
+            except SessionSubscriptionClosed:
+                return
+            finally:
+                subscription.close("client_disconnect")
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/v1/threads/{thread_id}/resume")
     def resume_hitl(thread_id: str, command: dict[str, Any]) -> JSONResponse:
@@ -313,6 +373,116 @@ def _build_analysis_input(request: JobAnalysisRequest) -> str:
     if request.resume_version is None:
         return "请解析以下岗位要求：\n" + request.jd_text
     return "请先分析以下岗位要求，再匹配指定简历：\n" + request.jd_text
+
+
+def _track_background_task(app: FastAPI, task: asyncio.Task[Any]) -> None:
+    """登记后台任务，并在结束后自动从应用状态移除。"""
+
+    app.state.background_tasks.add(task)
+    task.add_done_callback(app.state.background_tasks.discard)
+
+
+async def _run_graph_in_background(
+    *,
+    graph: Any,
+    event_bus: SessionEventBus,
+    thread_id: str,
+    session_id: str,
+    initial_state: dict[str, Any],
+    logger: Any,
+) -> None:
+    """在线程池中执行 Graph，并在调用层派生 run_failed / run_completed。
+
+    为什么这样做：
+        `run_failed` 与严格语义的 `run_completed` 属于整次 `graph.invoke()` 调用级事件，
+        正确判断点在调用层而不是节点 observer。
+
+    注意：
+        此处并发安全性依赖当前 `/api/tasks` 每次都会生成新的 `thread_id`。
+        因此不会触发同一 `thread_id` 被并发 invoke/resume 的逻辑竞态。
+        若 Task 10 引入同一 `thread_id` 的并发 resume 场景，需要重新评估
+        Checkpointer 的方法级锁是否足以覆盖整次图调用。
+    """
+
+    config = {"configurable": {"thread_id": thread_id, "session_id": session_id}}
+    try:
+        state = await asyncio.to_thread(graph.invoke, initial_state, config)
+    except Exception:
+        _publish_graph_run_event(
+            event_bus=event_bus,
+            logger=logger,
+            event_name="run_failed",
+            session_id=session_id,
+            thread_id=thread_id,
+            detail="GRAPH_EXECUTION_FAILED",
+            level="error",
+        )
+        return
+    _maybe_publish_run_completed(
+        event_bus=event_bus,
+        logger=logger,
+        state=state,
+        session_id=session_id,
+        thread_id=thread_id,
+    )
+
+
+def _maybe_publish_run_completed(
+    *,
+    event_bus: SessionEventBus,
+    logger: Any,
+    state: dict[str, Any],
+    session_id: str,
+    thread_id: str,
+) -> None:
+    """在 Graph 正常返回且存在最终产物时派生 `run_completed`。"""
+
+    final_output = state.get("final_output") if isinstance(state, dict) else None
+    if final_output is None:
+        return
+    _publish_graph_run_event(
+        event_bus=event_bus,
+        logger=logger,
+        event_name="run_completed",
+        session_id=session_id,
+        thread_id=thread_id,
+        detail=str(final_output.get("type", "final_output_ready")) if isinstance(final_output, dict) else "final_output_ready",
+        level="info",
+    )
+
+
+def _publish_graph_run_event(
+    *,
+    event_bus: SessionEventBus,
+    logger: Any,
+    event_name: str,
+    session_id: str,
+    thread_id: str,
+    detail: str,
+    level: Literal["info", "error"],
+) -> None:
+    """构造并发布整次 Graph 调用级事件，供同步/异步调用层复用。"""
+
+    event = build_log_event(
+        event=event_name,
+        session_id=session_id,
+        thread_id=thread_id,
+        node="api",
+        node_kind="control",
+        success=None,
+        detail=detail,
+    )
+    getattr(logger, level)(event)
+    event_bus.publish_threadsafe(event)
+
+
+def _format_sse_event(event: dict[str, Any]) -> str:
+    """把单条事件编码为标准 SSE 文本帧。"""
+
+    event_id = str(event.get("event_id", ""))
+    event_name = str(event.get("event", "message"))
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    return f"id: {event_id}\nevent: {event_name}\ndata: {payload}\n\n"
 
 
 app = create_app()

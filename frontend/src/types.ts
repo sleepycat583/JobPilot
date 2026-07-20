@@ -59,3 +59,25 @@ export type AgentProgressState = {
   activeEventSourceSession: string | null
   errorMessage: string | null
 }
+
+export type ThreadInterrupt = {
+  type: 'final_review' | 'low_match_score' | 'interview_answer' | 'interview_evaluation_unavailable'
+  target: string
+  accepted_actions: string[]
+  draft?: Record<string, unknown>
+  question?: string
+  question_id?: string
+  score?: number
+  threshold?: number
+  top_gaps?: string[]
+}
+
+export type ThreadStateResponse = {
+  thread_id: string
+  session_id: string
+  status: 'interrupted' | 'completed'
+  review_status: string | null
+  review_target: string | null
+  current_node: string | null
+  interrupt: ThreadInterrupt | null
+}

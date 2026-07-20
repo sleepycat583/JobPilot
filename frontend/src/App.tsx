@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 
 import { useAgentProgress } from './hooks/useAgentProgress'
+import { useThreadReview } from './hooks/useThreadReview'
 import type { RunStatus, TaskAcceptedResponse } from './types'
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const progress = useAgentProgress(sessionId)
+  const review = useThreadReview(threadId, sessionId)
 
   const statusTone = useMemo<Record<RunStatus, string>>(
     () => ({
@@ -132,6 +134,25 @@ function App() {
           </ul>
         </div>
       </section>
+
+      {review.state?.interrupt ? (
+        <section className="panel">
+          <h2>人工审核</h2>
+          {review.state.interrupt.type === 'final_review' ? (
+            <div className="actions-row">
+              <button type="button" className="primary-action" disabled={review.isResuming} onClick={() => void review.resume({ action: 'approve' })}>
+                {review.isResuming ? '提交中...' : '核可'}
+              </button>
+              <button type="button" disabled={review.isResuming} onClick={() => void review.resume({ action: 'reject', feedback: '请调整报告' })}>
+                驳回
+              </button>
+            </div>
+          ) : (
+            <p className="error-text">当前 interrupt 类型将在 Task 11 提供专用表单。</p>
+          )}
+          {review.error ? <p className="error-text">{review.error}</p> : null}
+        </section>
+      ) : null}
 
       <section className="panel timeline-panel">
         <h2>事件轨迹</h2>

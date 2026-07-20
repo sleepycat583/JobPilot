@@ -136,7 +136,7 @@ function App() {
         </div>
       </section>
 
-      {review.state?.interrupt ? <ThreadReviewPanel interrupt={review.state.interrupt} isResuming={review.isResuming} error={review.error ? { message: review.error } : null} onResume={(command) => void review.resume(command)} /> : null}
+      {review.state?.interrupt ? <ThreadReviewPanel interrupt={review.state.interrupt} isResuming={review.isResuming} error={review.error} onResume={(command) => void review.resume(command)} onRetry={review.retry} onRefresh={() => void review.loadState(review.state?.thread_id ?? '').catch(() => undefined)} /> : null}
 
       <section className="panel timeline-panel">
         <h2>事件轨迹</h2>

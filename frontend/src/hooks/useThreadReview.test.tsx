@@ -34,4 +34,17 @@ describe('useThreadReview', () => {
     await act(async () => { await result.current.loadState('thread-1') })
     expect(result.current.idempotencyKey).toBe('key-2')
   })
+
+  it('clears the active interrupt after a checkpoint-not-found response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: { code: 'CHECKPOINT_NOT_FOUND', message: '不存在' } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useThreadReview(null, null))
+    await act(async () => { await expect(result.current.loadState('thread-1')).rejects.toMatchObject({ code: 'CHECKPOINT_NOT_FOUND' }) })
+    expect(result.current.state).toBeNull()
+    expect(result.current.idempotencyKey).toBeNull()
+  })
 })

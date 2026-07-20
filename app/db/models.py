@@ -73,3 +73,38 @@ class ReviewAudit(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResumeIdempotencyRecord(Base):
+    """HITL resume 请求去重记录。
+
+    做什么：
+        在业务数据库中保存前端显式幂等键、处理租约及首次响应快照，避免重复调用
+        LangGraph 恢复。该表不承担 Checkpoint 图状态职责。
+    返回值：
+        ORM 实体供 API 与 Repository 查询、占用和完成回写。
+    """
+
+    __tablename__ = "resume_idempotency_records"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('processing', 'succeeded', 'failed')",
+            name="ck_resume_idempotency_records_status",
+        ),
+        UniqueConstraint("thread_id", "idempotency_key", name="uq_resume_idempotency_thread_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    command_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_audit_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

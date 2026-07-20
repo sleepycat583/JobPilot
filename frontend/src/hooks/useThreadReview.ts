@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ThreadStateResponse } from '../types'
+import type { ThreadReviewCommand, ThreadStateResponse } from '../types'
 
 const STORAGE_KEY = 'job-assistant.active-thread'
 
@@ -64,7 +64,7 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
     return () => window.clearTimeout(timer)
   }, [loadState, sessionId, threadId])
 
-  const resume = useCallback(async (command: Record<string, string>) => {
+  const resume = useCallback(async (command: ThreadReviewCommand) => {
     if (!state?.interrupt || !idempotencyKey || isResuming) return
     setIsResuming(true)
     setError(null)

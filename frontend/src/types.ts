@@ -60,17 +60,59 @@ export type AgentProgressState = {
   errorMessage: string | null
 }
 
-export type ThreadInterrupt = {
-  type: 'final_review' | 'low_match_score' | 'interview_answer' | 'interview_evaluation_unavailable'
+type InterruptBase = {
   target: string
   accepted_actions: string[]
-  draft?: Record<string, unknown>
-  question?: string
-  question_id?: string
-  score?: number
-  threshold?: number
-  top_gaps?: string[]
 }
+
+export type ThreadInterrupt =
+  | (InterruptBase & {
+  type: 'final_review'
+  target: 'jd_parsed' | 'match_result' | 'interview_report'
+  accepted_actions: ('approve' | 'reject')[]
+  draft?: Record<string, unknown>
+})
+  | (InterruptBase & {
+  type: 'low_match_score'
+  target: 'match_result'
+  accepted_actions: ('continue' | 'revise_inputs' | 'cancel')[]
+  score: number
+  threshold: number
+  top_gaps: string[]
+})
+  | (InterruptBase & {
+  type: 'interview_answer'
+  target: 'interview_state'
+  accepted_actions: ('submit_answer' | 'context_update' | 'end_interview')[]
+  question_id: string
+  question: string
+})
+  | (InterruptBase & {
+  type: 'interview_evaluation_unavailable'
+  target: 'question_record'
+  accepted_actions: ('retry_evaluation' | 'skip_evaluation')[]
+  question_id: string
+})
+
+export type FinalReviewCommand =
+  | { action: 'approve' }
+  | { action: 'reject'; feedback: string }
+export type LowScoreReviewCommand =
+  | { action: 'continue'; feedback?: string }
+  | { action: 'revise_inputs'; feedback?: string; resume_version?: string; jd_text?: string }
+  | { action: 'cancel'; feedback?: string }
+export type InterviewAnswerCommand =
+  | { action: 'submit_answer'; answer: string; context?: string }
+  | { action: 'context_update'; context: string; answer?: string }
+  | { action: 'end_interview' }
+export type EvaluationUnavailableCommand =
+  | { action: 'retry_evaluation' }
+  | { action: 'skip_evaluation' }
+export type ThreadReviewCommand =
+  | FinalReviewCommand
+  | LowScoreReviewCommand
+  | InterviewAnswerCommand
+  | EvaluationUnavailableCommand
 
 export type ThreadStateResponse = {
   thread_id: string

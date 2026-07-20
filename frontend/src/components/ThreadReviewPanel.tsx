@@ -2,6 +2,7 @@
 import { useState } from 'react'
 
 import { LowScoreReviewForm } from './LowScoreReviewForm'
+import { InterviewAnswerForm } from './InterviewAnswerForm'
 import type { ThreadInterrupt, ThreadReviewCommand } from '../types'
 
 type ReviewError = { code?: string; message: string } | null
@@ -15,7 +16,7 @@ export function ThreadReviewPanel({ interrupt, isResuming, error, onResume }: {
   const [feedback, setFeedback] = useState('')
   return <section className="panel">
     <h2>人工审核</h2>
-    {interrupt.type === 'low_match_score' ? <LowScoreReviewForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'final_review' ? <div className="actions-row">
+    {interrupt.type === 'low_match_score' ? <LowScoreReviewForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'interview_answer' ? <InterviewAnswerForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'final_review' ? <div className="actions-row">
       <button type="button" className="primary-action" disabled={isResuming} onClick={() => onResume({ action: 'approve' })}>{isResuming ? '提交中...' : '核可'}</button>
       <label className="field-label" htmlFor="final-review-feedback">驳回反馈</label>
       <textarea id="final-review-feedback" className="jd-input" value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={3} disabled={isResuming} />

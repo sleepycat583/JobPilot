@@ -126,7 +126,8 @@ def create_app(
             app_settings = settings or load_settings()
             app.state.dependencies = dependency_factory(app_settings)
         app.state.event_bus = SessionEventBus(loop=asyncio.get_running_loop())
-        app.state.background_tasks: set[asyncio.Task[Any]] = set()
+        background_tasks: set[asyncio.Task[Any]] = set()
+        app.state.background_tasks = background_tasks
         configure_event_publisher(app.state.event_bus.publish_threadsafe)
         try:
             yield

@@ -30,7 +30,7 @@ Week3 实际状态核实报告。
 | 8 | 已完成(有证据) | `285ef82`、`171bf21`、`scripts/migrate_experiment_archive.py`、`docs/experiment_run_index_migration_map.md`、`tests/unit/test_experiment_archive_migration.py`。真实只读归档 18 行已导入独立临时目标库，baseline/multi_agent 各为 1-9 共 9 行，source id 映射可审计且源文件字节未改变；脚本后续运行从已有最大编号继续。 |
 | 9 | 已完成(有证据) | `08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`；`app/db/models.py`、`app/repositories/review_audit.py`、`app/api.py` 及 `tests/unit/test_review_audit_repository.py`、`tests/integration/test_api.py`。测试覆盖合法审核写入、完成状态和非法命令不写审计；未修改 `app/graph/`。 |
 | 10 | 已完成(有证据) | `3f0b2cc`、`32b9991`、`5a6d204`、`f601459`、`b986f80`、`0b3e5be`；`GET /v1/threads/{thread_id}/state` 支持刷新恢复 interrupt，resume 使用前端 UUIDv4 幂等键及业务库快照重放；同 key 重放 200、不同 key 完成态 404、key 复用 409、30 秒租约接管和线程级有效租约 409 均由 `tests/integration/test_api.py` 覆盖。前端独立 `useThreadReview` 在真实 HTTP 响应前禁用最终核可表单，刷新从 sessionStorage + state API 恢复。 |
-| 11 | 部分完成(说明具体缺口) | 已实现四类前端表单、幂等键生命周期和基础测试；当前缺口为错误码差异化处理、low score cancel 可选 feedback、context-only payload 严格移除 `answer` 字段，需后续独立提交修复验证。 |
+| 11 | 已完成(有证据) | 基础提交 `11d43e0`、`7d04e94`、`7a7fe9c`、`4ddbef7`、`05e6cd8`、`0e29aef`、`9f142e1`、`f1c64a7`，缺口修复提交 `43f1883`、`555d8ac`、`37f7d23`。四类表单均按冻结 interrupt type 分发；同一 interrupt 保持幂等键，新的 interrupt 才轮换 key；错误码按 409/404/422/500 分支处理，404 刷新失败清空 state；low score cancel 支持可选 feedback；context-only payload 不含 `answer` 键。前端 6 个测试文件、21 个用例全部通过，未修改 `app/api.py`、`app/graph/` 或 Schema。 |
 | 12 | 部分完成(说明具体缺口) | 当前全量测试基线已更新且核心 Week3 代码存在，但原计划的 SSE + React + interrupt 完整主链尚未跑通，且本报告正用于补齐状态文档。证据：`08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`、本报告及下述测试结果。 |
 
 ## 三、数据库与 Review 风险
@@ -50,7 +50,7 @@ Week3 实际状态核实报告。
 295 passed in 36.43s
 ```
 
-使用项目 `.venv` 的 `python -m pytest -q` 已通过 295 个测试，无 failed、无 skipped。Task10 收尾的聚焦验证为 `python -m pytest tests/integration/test_api.py tests/unit/test_resume_idempotency_repository.py -q`，通过 46 个测试，包含 `test_resume_with_new_key_reclaims_expired_thread_lease_and_marks_old_record` 与 `test_resume_with_new_key_rejects_active_thread_lease`。Task11 已引入 Vitest + React Testing Library；`npm --prefix frontend run test -- --reporter=dot` 通过 6 个测试文件、17 个用例，`npm --prefix frontend run build` 通过。测试文件为 `App.test.tsx`、`hooks/useThreadReview.test.tsx`、`components/ThreadReviewPanel.test.tsx`、`components/LowScoreReviewForm.test.tsx`、`components/InterviewAnswerForm.test.tsx`、`components/EvaluationUnavailableForm.test.tsx`。
+使用项目 `.venv` 的 `python -m pytest -q` 已通过 295 个测试，无 failed、无 skipped。Task10 收尾的聚焦验证为 `python -m pytest tests/integration/test_api.py tests/unit/test_resume_idempotency_repository.py -q`，通过 46 个测试，包含 `test_resume_with_new_key_reclaims_expired_thread_lease_and_marks_old_record` 与 `test_resume_with_new_key_rejects_active_thread_lease`。Task11 最终 `npm --prefix frontend run test -- --reporter=dot` 通过 6 个测试文件、21 个用例，`npm --prefix frontend run build` 通过。测试文件为 `App.test.tsx`、`hooks/useThreadReview.test.tsx`、`components/ThreadReviewPanel.test.tsx`、`components/LowScoreReviewForm.test.tsx`、`components/InterviewAnswerForm.test.tsx`、`components/EvaluationUnavailableForm.test.tsx`。关键证据包括：低分 continue/cancel（含无反馈和可选 feedback）、revise_inputs 三种单字段组合及 JD 长度边界；面试 submit/context-only/context+answer/end confirm；四类表单容器分发、resuming 禁用、五类错误分支、同 key 重试和 404 清空 state。
 
 ## 五、后续核实范围
 

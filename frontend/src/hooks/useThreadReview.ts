@@ -3,7 +3,7 @@
  * 独立于 SSE 进度状态：它从 state API 恢复当前 interrupt，并在真实 resume HTTP
  * 响应返回之前保持 `isResuming`，以阻止重复提交。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ThreadStateResponse } from '../types'
 
@@ -27,15 +27,29 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
   const [isResuming, setIsResuming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
+  const interruptFingerprintRef = useRef<string | null>(null)
+
+  const applyState = useCallback((payload: ThreadStateResponse) => {
+    const fingerprint = payload.interrupt ? JSON.stringify(payload.interrupt) : null
+    setState(payload)
+    setIdempotencyKey((currentKey) => {
+      if (!fingerprint) {
+        interruptFingerprintRef.current = null
+        return null
+      }
+      if (interruptFingerprintRef.current === fingerprint && currentKey) return currentKey
+      interruptFingerprintRef.current = fingerprint
+      return crypto.randomUUID()
+    })
+  }, [])
 
   const loadState = useCallback(async (id: string) => {
     const response = await fetch(`/v1/threads/${id}/state`)
     if (!response.ok) throw new Error('无法恢复当前审核状态。')
     const payload = (await response.json()) as ThreadStateResponse
-    setState(payload)
-    setIdempotencyKey(payload.interrupt ? crypto.randomUUID() : null)
+    applyState(payload)
     return payload
-  }, [])
+  }, [applyState])
 
   useEffect(() => {
     const active = threadId && sessionId ? { threadId, sessionId } : readStoredThread()
@@ -61,14 +75,13 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
       })
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error?.message ?? '审核提交失败。')
       const next = (await response.json()) as ThreadStateResponse
-      setState(next)
-      setIdempotencyKey(next.interrupt ? crypto.randomUUID() : null)
+      applyState(next)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '审核提交失败。')
     } finally {
       setIsResuming(false)
     }
-  }, [idempotencyKey, isResuming, state])
+  }, [applyState, idempotencyKey, isResuming, state])
 
-  return { state, isResuming, error, resume, loadState }
+  return { state, isResuming, error, idempotencyKey, resume, loadState }
 }

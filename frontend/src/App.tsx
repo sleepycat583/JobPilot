@@ -23,6 +23,7 @@ function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [finalReviewFeedback, setFinalReviewFeedback] = useState('')
 
   const progress = useAgentProgress(sessionId)
   const review = useThreadReview(threadId, sessionId)
@@ -154,7 +155,18 @@ function App() {
               <button type="button" className="primary-action" disabled={review.isResuming} onClick={() => void review.resume({ action: 'approve' })}>
                 {review.isResuming ? '提交中...' : '核可'}
               </button>
-              <button type="button" disabled={review.isResuming} onClick={() => void review.resume({ action: 'reject', feedback: '请调整报告' })}>
+              <label className="field-label" htmlFor="final-review-feedback">
+                驳回反馈
+              </label>
+              <textarea
+                id="final-review-feedback"
+                className="jd-input"
+                value={finalReviewFeedback}
+                onChange={(event) => setFinalReviewFeedback(event.target.value)}
+                rows={3}
+                disabled={review.isResuming}
+              />
+              <button type="button" disabled={review.isResuming || !finalReviewFeedback.trim()} onClick={() => void review.resume({ action: 'reject', feedback: finalReviewFeedback.trim() })}>
                 驳回
               </button>
             </div>

@@ -30,7 +30,7 @@ Week3 实际状态核实报告。
 | 8 | 已完成(有证据) | `285ef82`、`171bf21`、`scripts/migrate_experiment_archive.py`、`docs/experiment_run_index_migration_map.md`、`tests/unit/test_experiment_archive_migration.py`。真实只读归档 18 行已导入独立临时目标库，baseline/multi_agent 各为 1-9 共 9 行，source id 映射可审计且源文件字节未改变；脚本后续运行从已有最大编号继续。 |
 | 9 | 已完成(有证据) | `08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`；`app/db/models.py`、`app/repositories/review_audit.py`、`app/api.py` 及 `tests/unit/test_review_audit_repository.py`、`tests/integration/test_api.py`。测试覆盖合法审核写入、完成状态和非法命令不写审计；未修改 `app/graph/`。 |
 | 10 | 已完成(有证据) | `3f0b2cc`、`32b9991`、`5a6d204`、`f601459`、`b986f80`、`0b3e5be`；`GET /v1/threads/{thread_id}/state` 支持刷新恢复 interrupt，resume 使用前端 UUIDv4 幂等键及业务库快照重放；同 key 重放 200、不同 key 完成态 404、key 复用 409、30 秒租约接管和线程级有效租约 409 均由 `tests/integration/test_api.py` 覆盖。前端独立 `useThreadReview` 在真实 HTTP 响应前禁用最终核可表单，刷新从 sessionStorage + state API 恢复。 |
-| 11 | 部分完成(说明具体缺口) | `final_review` 已可操作；`low_match_score`、`interview_answer`、`interview_evaluation_unavailable` 暂未实现专用表单。`0b3e5be` 已为三类类型展示具体、诚实的不可操作提示，避免空白或伪装成功。前端尚未引入测试 runner/组件测试依赖，当前以 `npm run lint` 与 `npm run build` 验证。 |
+| 11 | 已完成(有证据) | `11d43e0`、`7d04e94`、`7a7fe9c`、`4ddbef7`、`05e6cd8`、`0e29aef`、`9f142e1`、`f1c64a7`；`useThreadReview` 保持同一 interrupt 的幂等键，`ThreadReviewPanel` 分发 final_review、低分匹配、面试回答与评价不可用四类表单。`frontend/src/**/*.test.tsx` 共 6 个测试文件、17 个用例，覆盖反馈必填、幂等键轮换、resuming 禁用、五类错误显示、三类低分修订输入、面试上下文修订与结束确认、评价重试/跳过确认。未修改 `app/api.py`、`app/graph/` 或 Schema。 |
 | 12 | 部分完成(说明具体缺口) | 当前全量测试基线已更新且核心 Week3 代码存在，但原计划的 SSE + React + interrupt 完整主链尚未跑通，且本报告正用于补齐状态文档。证据：`08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`、本报告及下述测试结果。 |
 
 ## 三、数据库与 Review 风险
@@ -50,10 +50,10 @@ Week3 实际状态核实报告。
 295 passed in 36.43s
 ```
 
-使用项目 `.venv` 的 `python -m pytest -q` 已通过 295 个测试，无 failed、无 skipped。Task10 收尾的聚焦验证为 `python -m pytest tests/integration/test_api.py tests/unit/test_resume_idempotency_repository.py -q`，通过 46 个测试，包含 `test_resume_with_new_key_reclaims_expired_thread_lease_and_marks_old_record` 与 `test_resume_with_new_key_rejects_active_thread_lease`。前端 `npm run lint` 与 `npm run build` 均通过；前端没有 npm test 脚本、测试 runner 或组件测试依赖，因此未虚构组件测试结果。
+使用项目 `.venv` 的 `python -m pytest -q` 已通过 295 个测试，无 failed、无 skipped。Task10 收尾的聚焦验证为 `python -m pytest tests/integration/test_api.py tests/unit/test_resume_idempotency_repository.py -q`，通过 46 个测试，包含 `test_resume_with_new_key_reclaims_expired_thread_lease_and_marks_old_record` 与 `test_resume_with_new_key_rejects_active_thread_lease`。Task11 已引入 Vitest + React Testing Library；`npm --prefix frontend run test -- --reporter=dot` 通过 6 个测试文件、17 个用例，`npm --prefix frontend run build` 通过。测试文件为 `App.test.tsx`、`hooks/useThreadReview.test.tsx`、`components/ThreadReviewPanel.test.tsx`、`components/LowScoreReviewForm.test.tsx`、`components/InterviewAnswerForm.test.tsx`、`components/EvaluationUnavailableForm.test.tsx`。
 
 ## 五、后续核实范围
 
 - Task 8：Case1 归档导入和编号映射已验证；Case2/Case3 的真实实验记录仍需 Week4 规划与执行。
-- Task 11：补齐低分匹配、面试回答、评价不可用三类专用表单，并引入前端组件测试基础设施与端到端证据。
+- Task 11：已完成前端表单与组件测试；后续仅可补充真实后端联调或端到端证据，不改变本任务完成状态。
 - SSE：当前仅宣称基础实时事件流；断线补发和 `Last-Event-ID` 仍按架构文档 §16.5 保持未完成表述。

@@ -7,13 +7,15 @@ export function LowScoreReviewForm({ interrupt, disabled, onSubmit }: { interrup
   const [feedback, setFeedback] = useState('')
   const [resumeVersion, setResumeVersion] = useState('')
   const [jdText, setJdText] = useState('')
+  const [cancelFeedback, setCancelFeedback] = useState('')
   const canRevise = Boolean(feedback.trim() || resumeVersion.trim() || jdText.trim().length >= 20)
   return <div>
     <p>匹配分数：{interrupt.score} / 阈值：{interrupt.threshold}</p>
     <ul>{interrupt.top_gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
     {!revising ? <div className="actions-row">
       <button type="button" disabled={disabled} onClick={() => onSubmit({ action: 'continue' })}>继续</button>
-      <button type="button" disabled={disabled} onClick={() => onSubmit({ action: 'cancel' })}>取消</button>
+      <label htmlFor="cancel-feedback">取消反馈（可选）</label><textarea id="cancel-feedback" value={cancelFeedback} onChange={(event) => setCancelFeedback(event.target.value)} disabled={disabled} />
+      <button type="button" disabled={disabled} onClick={() => onSubmit(cancelFeedback.trim() ? { action: 'cancel', feedback: cancelFeedback.trim() } : { action: 'cancel' })}>取消</button>
       <button type="button" disabled={disabled} onClick={() => setRevising(true)}>修改输入后重新评审</button>
     </div> : <div>
       <label htmlFor="low-score-feedback">修订反馈</label><textarea id="low-score-feedback" value={feedback} onChange={(event) => setFeedback(event.target.value)} disabled={disabled} />

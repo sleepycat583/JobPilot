@@ -1,14 +1,14 @@
 <!--
 Week3 实际状态核实报告。
 用途：根据提交 diff、代码/测试证据和现场命令结果，校正 week3_plan.md 与 README.md 的状态描述。
-核实范围：截至 08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f；本报告不修改业务代码。
+核实范围：截至 `0b3e5be`；本报告在后续 Task10 实现完成后同步状态与验证证据。
 -->
 
 # Week3 状态核实报告
 
 ## 一、核实范围与结论
 
-核实基准为最新提交 `08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`，提交标题为 `feat(week3): 接入业务SQLite迁移与Review审计`。最近 15 条提交已核对。该 commit 的统计为 `23 files changed, 1040 insertions(+), 73 deletions(-)`；commit message 未按 §19.2 写出“改了什么/为什么改/排除了什么方案”三点。
+初始核实基准为 `08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`。Task10 后续实现提交为 `3f0b2cc`、`32b9991`、`5a6d204`、`f601459`，收尾验证提交为 `b986f80` 与 `0b3e5be`；均未修改 `app/graph/` 业务逻辑或 Graph 拓扑。
 
 提交改动新增了独立业务数据库基础设施：`app/db/base.py`、`app/db/engine.py`、`app/db/session.py`、`app/db/models.py`；配置中的业务库为 `sqlite:///./data/app.sqlite3`，Checkpoint 为 `./data/checkpoints.sqlite3`。业务 engine/session 与 `app/graph/checkpoint.py` 的 Checkpointer 使用不同模块、文件和连接边界；本 commit 未修改 `app/graph/`，未发现改变 Review Gate/HITL 生命周期的证据。
 
@@ -29,8 +29,8 @@ Week3 实际状态核实报告。
 | 7 | 已完成(有证据) | `66cbb34`、`migrations/versions/20260720_0002_unique_experiment_sampling_key.py`、`tests/integration/test_alembic_migrations.py`。SQLite batch mode 已验证干净已有数据升级后行数和版本保持正确；重复五元组时明确失败，原表数据和 revision 保留；全新库和重复 upgrade 也通过。 |
 | 8 | 已完成(有证据) | `285ef82`、`171bf21`、`scripts/migrate_experiment_archive.py`、`docs/experiment_run_index_migration_map.md`、`tests/unit/test_experiment_archive_migration.py`。真实只读归档 18 行已导入独立临时目标库，baseline/multi_agent 各为 1-9 共 9 行，source id 映射可审计且源文件字节未改变；脚本后续运行从已有最大编号继续。 |
 | 9 | 已完成(有证据) | `08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`；`app/db/models.py`、`app/repositories/review_audit.py`、`app/api.py` 及 `tests/unit/test_review_audit_repository.py`、`tests/integration/test_api.py`。测试覆盖合法审核写入、完成状态和非法命令不写审计；未修改 `app/graph/`。 |
-| 10 | 未开始(无对应代码/测试) | 当前提交和测试中没有刷新恢复 API 与 resume 幂等契约的独立实现/验收证据；现有 Checkpoint 恢复测试不等同于重复提交幂等。 |
-| 11 | 未开始(无对应代码/测试) | `frontend/` 尚无四类 interrupt 表单、刷新恢复和重复提交幂等的浏览器端实现/测试证据。 |
+| 10 | 已完成(有证据) | `3f0b2cc`、`32b9991`、`5a6d204`、`f601459`、`b986f80`、`0b3e5be`；`GET /v1/threads/{thread_id}/state` 支持刷新恢复 interrupt，resume 使用前端 UUIDv4 幂等键及业务库快照重放；同 key 重放 200、不同 key 完成态 404、key 复用 409、30 秒租约接管和线程级有效租约 409 均由 `tests/integration/test_api.py` 覆盖。前端独立 `useThreadReview` 在真实 HTTP 响应前禁用最终核可表单，刷新从 sessionStorage + state API 恢复。 |
+| 11 | 部分完成(说明具体缺口) | `final_review` 已可操作；`low_match_score`、`interview_answer`、`interview_evaluation_unavailable` 暂未实现专用表单。`0b3e5be` 已为三类类型展示具体、诚实的不可操作提示，避免空白或伪装成功。前端尚未引入测试 runner/组件测试依赖，当前以 `npm run lint` 与 `npm run build` 验证。 |
 | 12 | 部分完成(说明具体缺口) | 当前全量测试基线已更新且核心 Week3 代码存在，但原计划的 SSE + React + interrupt 完整主链尚未跑通，且本报告正用于补齐状态文档。证据：`08fcf8fac191e78aba0d5d8b0bcba08e577b0f5f`、本报告及下述测试结果。 |
 
 ## 三、数据库与 Review 风险
@@ -47,13 +47,13 @@ Week3 实际状态核实报告。
 执行环境：`D:\求职助手\.venv\Scripts\python.exe`，项目根目录为 `D:\求职助手`，`job-assistant` 已以 editable 方式安装。
 
 ```text
-284 passed in 40.03s
+295 passed in 36.43s
 ```
 
-使用项目 `.venv` 的 `python -m pytest -q` 通过 284 个测试，无 failed、无 skipped。相较计划 Task 0 记录的 `246 passed in 38.04s`，增加 38 个测试，其中本轮新增 7 个归档、编号、唯一键和 batch migration 回归测试；增长合理。上一轮直接执行 `pytest -q` 的 `ModuleNotFoundError: No module named 'app'` 已确认是调用环境路径问题，不是业务测试失败。
+使用项目 `.venv` 的 `python -m pytest -q` 已通过 295 个测试，无 failed、无 skipped。Task10 收尾的聚焦验证为 `python -m pytest tests/integration/test_api.py tests/unit/test_resume_idempotency_repository.py -q`，通过 46 个测试，包含 `test_resume_with_new_key_reclaims_expired_thread_lease_and_marks_old_record` 与 `test_resume_with_new_key_rejects_active_thread_lease`。前端 `npm run lint` 与 `npm run build` 均通过；前端没有 npm test 脚本、测试 runner 或组件测试依赖，因此未虚构组件测试结果。
 
 ## 五、后续核实范围
 
 - Task 8：Case1 归档导入和编号映射已验证；Case2/Case3 的真实实验记录仍需 Week4 规划与执行。
-- Task 10-11：补齐刷新恢复、resume 幂等和四类 interrupt 表单，并增加前端/端到端证据。
+- Task 11：补齐低分匹配、面试回答、评价不可用三类专用表单，并引入前端组件测试基础设施与端到端证据。
 - SSE：当前仅宣称基础实时事件流；断线补发和 `Last-Event-ID` 仍按架构文档 §16.5 保持未完成表述。

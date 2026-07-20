@@ -5,6 +5,7 @@
 """
 
 from typing import Annotated, Any, Literal, Union
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -138,3 +139,15 @@ HITLInterruptPayload = Annotated[
     Union[LowScoreInterruptPayload, InterviewInterruptPayload, InterviewEvaluationUnavailableInterruptPayload, FinalReviewInterruptPayload],
     Field(discriminator="type"),
 ]
+
+
+class ResumeRequest(BaseModel):
+    """HTTP resume 请求外层契约。
+
+    幂等键属于 API 去重元数据，不会传入 LangGraph `Command(resume=...)` 的业务命令。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: UUID
+    command: dict[str, Any]

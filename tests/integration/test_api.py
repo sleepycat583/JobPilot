@@ -11,6 +11,7 @@ import asyncio
 import threading
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -27,6 +28,7 @@ from app.api import AppDependencies, create_app
 from app.db import Base, build_session_factory, create_sqlalchemy_engine
 from app.constants import MAX_INPUT_LENGTH
 from app.graph.builder import build_graph
+from app.repositories.resume_idempotency import ResumeIdempotencyRepository
 
 JD_TEXT = "后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。"
 JD_PARSED_JSON = (
@@ -433,6 +435,98 @@ def test_resume_persists_review_audit_for_approve_action(tmp_path: Path) -> None
     assert row["review_target"] == "jd_parsed"
     assert row["action"] == "approve"
     assert row["result"] == "succeeded"
+
+
+def test_resume_same_key_replays_first_response_after_completed_checkpoint(tmp_path: Path) -> None:
+    client, _ = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    request = {"idempotency_key": "00000000-0000-4000-8000-000000000010", "command": {"action": "approve"}}
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        first = client.post(f"/v1/threads/{thread_id}/resume", json=request)
+        replay = client.post(f"/v1/threads/{thread_id}/resume", json=request)
+        new_key = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"idempotency_key": "00000000-0000-4000-8000-000000000011", "command": {"action": "approve"}},
+        )
+
+    assert first.status_code == replay.status_code == 200
+    assert replay.json() == first.json()
+    assert new_key.status_code == 404
+    assert new_key.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
+
+
+def test_resume_rejects_key_reused_for_different_command(tmp_path: Path) -> None:
+    client, _ = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    key = "00000000-0000-4000-8000-000000000012"
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"idempotency_key": key, "command": {"action": "approve"}})
+        reused = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"idempotency_key": key, "command": {"action": "reject", "feedback": "different"}},
+        )
+
+    assert reused.status_code == 409
+    assert reused.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_resume_rejects_non_v4_idempotency_key(tmp_path: Path) -> None:
+    client, _ = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        response = client.post(
+            f"/v1/threads/{initial.json()['thread_id']}/resume",
+            json={"idempotency_key": "00000000-0000-1000-8000-000000000013", "command": {"action": "approve"}},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "IDEMPOTENCY_KEY_INVALID"
+
+
+def test_resume_reclaims_expired_processing_lease_and_leaves_audit_trace(tmp_path: Path) -> None:
+    client, database_path = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
+    key = "00000000-0000-4000-8000-000000000014"
+    with client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """INSERT INTO resume_idempotency_records
+                        (thread_id, session_id, idempotency_key, command_fingerprint, status, lease_expires_at, created_at)
+                        VALUES (:thread_id, :session_id, :key, :fingerprint, 'processing', :expired, :created)"""
+                    ),
+                    {
+                        "thread_id": thread_id,
+                        "session_id": initial.json()["session_id"],
+                        "key": key,
+                        "fingerprint": __import__("hashlib").sha256(b'{"action":"approve"}').hexdigest(),
+                        "expired": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                        "created": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+        finally:
+            engine.dispose()
+        response = client.post(
+            f"/v1/threads/{thread_id}/resume",
+            json={"idempotency_key": key, "command": {"action": "approve"}},
+        )
+
+    assert response.status_code == 200
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT status, error_code FROM resume_idempotency_records WHERE thread_id = :thread_id"),
+                {"thread_id": thread_id},
+            ).mappings().one()
+    finally:
+        engine.dispose()
+    assert row["status"] == "succeeded"
 
 
 def test_resume_invalid_command_does_not_persist_review_audit(tmp_path: Path) -> None:

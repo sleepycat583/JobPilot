@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -29,8 +30,9 @@ from app.graph.checkpoint import open_sqlite_checkpointer
 from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
+from app.repositories.resume_idempotency import ResumeIdempotencyConflictError, ResumeIdempotencyRepository
 from app.repositories.review_audit import ReviewAuditRepository
-from app.schemas.review import HITLCommand
+from app.schemas.review import HITLCommand, ResumeRequest
 from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
 from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger
 from pydantic import TypeAdapter, ValidationError
@@ -241,11 +243,42 @@ def create_app(
         return JSONResponse(status_code=200, content=_snapshot_state_payload(snapshot, thread_id=thread_id))
 
     @app.post("/v1/threads/{thread_id}/resume")
-    def resume_hitl(thread_id: str, command: dict[str, Any]) -> JSONResponse:
+    def resume_hitl(thread_id: str, payload: dict[str, Any]) -> JSONResponse:
         """恢复当前线程的低分、面试或最终核可 HITL 节点。"""
 
         graph = app.state.dependencies.graph
         config = {"configurable": {"thread_id": thread_id}}
+        command, idempotency_key, request_error = _parse_resume_payload(payload)
+        if request_error is not None:
+            return _error_response(request_error, status_code=422)
+        assert command is not None
+        fingerprint = _command_fingerprint(command)
+        record = None
+        lease_reclaimed = False
+        expired_audit_id: int | None = None
+        if idempotency_key is not None:
+            if app.state.dependencies.session_factory is None:
+                return _error_response(
+                    ApiError(code="IDEMPOTENCY_STORAGE_UNAVAILABLE", message="Resume idempotency storage is unavailable"),
+                    status_code=500,
+                )
+            with app.state.dependencies.session_factory() as session:
+                repository = ResumeIdempotencyRepository(session)
+                record = repository.get(thread_id=thread_id, idempotency_key=idempotency_key)
+                if record is not None:
+                    if record.command_fingerprint != fingerprint:
+                        return _error_response(ApiError(code="IDEMPOTENCY_KEY_REUSED", message="Idempotency key was used with a different command"), status_code=409)
+                    if record.status == "succeeded" and record.response_json is not None:
+                        return JSONResponse(status_code=record.http_status or 200, content=json.loads(record.response_json))
+                    if record.status == "failed":
+                        return _error_response(
+                            ApiError(code=record.error_code or "GRAPH_EXECUTION_FAILED", message=record.error_message or "Interrupted graph resume failed"),
+                            status_code=500,
+                        )
+                    lease_reclaimed = repository.reclaim_expired_lease(record)
+                    if not lease_reclaimed:
+                        return _error_response(ApiError(code="RESUME_IN_PROGRESS", message="Resume request is already processing"), status_code=409)
+                    expired_audit_id = record.review_audit_id
         snapshot = _safe_get_state(graph, config)
         if snapshot is None or not snapshot.values or not snapshot.next:
             return _error_response(
@@ -258,6 +291,25 @@ def create_app(
             return _error_response(validated_command, status_code=422)
         session_id = _session_id_from_snapshot(snapshot)
         config["configurable"]["session_id"] = session_id
+        if idempotency_key is not None and record is None:
+            with app.state.dependencies.session_factory() as session:
+                repository = ResumeIdempotencyRepository(session)
+                try:
+                    record = repository.create_processing(
+                        thread_id=thread_id,
+                        session_id=session_id,
+                        idempotency_key=idempotency_key,
+                        command_fingerprint=fingerprint,
+                    )
+                except ResumeIdempotencyConflictError:
+                    record = repository.get(thread_id=thread_id, idempotency_key=idempotency_key)
+                    if record is None:
+                        return _error_response(ApiError(code="RESUME_IN_PROGRESS", message="Resume request is already processing"), status_code=409)
+                    if record.command_fingerprint != fingerprint:
+                        return _error_response(ApiError(code="IDEMPOTENCY_KEY_REUSED", message="Idempotency key was used with a different command"), status_code=409)
+                    if record.status == "succeeded" and record.response_json is not None:
+                        return JSONResponse(status_code=record.http_status or 200, content=json.loads(record.response_json))
+                    return _error_response(ApiError(code="RESUME_IN_PROGRESS", message="Resume request is already processing"), status_code=409)
         audit_id: int | None = None
         if app.state.dependencies.session_factory is not None:
             interrupt_payload = _extract_interrupt(snapshot)
@@ -279,6 +331,14 @@ def create_app(
                         status_code=500,
                     )
                 audit_id = audit.id
+            if record is not None:
+                with app.state.dependencies.session_factory() as session:
+                    repository = ResumeIdempotencyRepository(session)
+                    attached = repository.get(thread_id=thread_id, idempotency_key=idempotency_key or "")
+                    if attached is not None:
+                        repository.attach_review_audit(attached, review_audit_id=audit_id)
+        if lease_reclaimed and expired_audit_id is not None:
+            _mark_review_audit_lease_expired(app.state.dependencies.session_factory, expired_audit_id)
         configure_structured_logger().info(
             build_log_event(
                 event="run_resumed", session_id=session_id, thread_id=thread_id,
@@ -289,12 +349,15 @@ def create_app(
             state = graph.invoke(Command(resume=validated_command.model_dump()), config=config)
         except Exception:
             _mark_review_audit_failed(app.state.dependencies.session_factory, audit_id)
+            _mark_resume_idempotency_failed(app.state.dependencies.session_factory, thread_id, idempotency_key, audit_id)
             return _error_response(
                 ApiError(code="GRAPH_EXECUTION_FAILED", message="Interrupted graph resume failed"),
                 status_code=500,
             )
         _mark_review_audit_succeeded(app.state.dependencies.session_factory, audit_id)
-        return _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
+        response = _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
+        _mark_resume_idempotency_succeeded(app.state.dependencies.session_factory, thread_id, idempotency_key, response, audit_id)
+        return response
 
     return app
 
@@ -435,6 +498,27 @@ def _safe_get_state(graph: Any, config: dict[str, Any]) -> Any | None:
         return None
 
 
+def _parse_resume_payload(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, ApiError | None]:
+    """解析 resume envelope；旧格式保留给已完成态的 CHECKPOINT_NOT_FOUND 契约。"""
+
+    if "idempotency_key" not in payload and "command" not in payload:
+        return payload, None, None
+    try:
+        request = ResumeRequest.model_validate(payload)
+    except ValidationError:
+        return None, None, ApiError(code="RESUME_REQUEST_INVALID", message="Resume request requires a UUIDv4 idempotency_key and command")
+    if request.idempotency_key.version != 4:
+        return None, None, ApiError(code="IDEMPOTENCY_KEY_INVALID", message="idempotency_key must be a UUIDv4")
+    return request.command, str(request.idempotency_key), None
+
+
+def _command_fingerprint(command: dict[str, Any]) -> str:
+    """计算命令稳定摘要，阻止同一幂等键被换作用途。"""
+
+    canonical = json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _validate_hitl_command(command: dict[str, Any], snapshot: Any) -> HITLCommand | ApiError:
     """按当前 checkpoint 的 interrupt 类型校验恢复命令，拒绝跨 Gate 动作。"""
 
@@ -518,6 +602,43 @@ def _mark_review_audit_failed(session_factory: sessionmaker[Session] | None, aud
             error_message="Interrupted graph resume failed",
             completed_at=datetime.now(timezone.utc),
         )
+
+
+def _mark_review_audit_lease_expired(session_factory: sessionmaker[Session] | None, audit_id: int) -> None:
+    """审计记录显式标记租约过期，避免恢复重试无留痕。"""
+
+    if session_factory is None:
+        return
+    with session_factory() as session:
+        ReviewAuditRepository(session).mark_completed(
+            audit_id, result="failed", result_code="RESUME_LEASE_EXPIRED",
+            error_message="Resume processing lease expired before a final response was stored",
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
+def _mark_resume_idempotency_succeeded(session_factory: sessionmaker[Session] | None, thread_id: str, idempotency_key: str | None, response: JSONResponse, audit_id: int | None) -> None:
+    """保存首次成功响应快照，供相同幂等键重放。"""
+
+    if session_factory is None or idempotency_key is None:
+        return
+    with session_factory() as session:
+        repository = ResumeIdempotencyRepository(session)
+        record = repository.get(thread_id=thread_id, idempotency_key=idempotency_key)
+        if record is not None:
+            repository.mark_succeeded(record, http_status=response.status_code, response_json=response.body.decode("utf-8"), review_audit_id=audit_id)
+
+
+def _mark_resume_idempotency_failed(session_factory: sessionmaker[Session] | None, thread_id: str, idempotency_key: str | None, audit_id: int | None) -> None:
+    """持久化恢复失败，避免相同 key 再次执行未知图状态。"""
+
+    if session_factory is None or idempotency_key is None:
+        return
+    with session_factory() as session:
+        repository = ResumeIdempotencyRepository(session)
+        record = repository.get(thread_id=thread_id, idempotency_key=idempotency_key)
+        if record is not None:
+            repository.mark_failed(record, error_code="GRAPH_EXECUTION_FAILED", error_message="Interrupted graph resume failed", review_audit_id=audit_id)
 
 
 def _build_analysis_input(request: JobAnalysisRequest) -> str:

@@ -92,6 +92,14 @@ class ResumeIdempotencyRepository:
         self._session.refresh(entity)
         return True
 
+    def attach_review_audit(self, entity: ResumeIdempotencyRecord, *, review_audit_id: int) -> ResumeIdempotencyRecord:
+        """关联本次实际执行创建的 Review 审计记录。"""
+
+        entity.review_audit_id = review_audit_id
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
     def mark_succeeded(
         self,
         entity: ResumeIdempotencyRecord,

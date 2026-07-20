@@ -2,18 +2,8 @@ import { useMemo, useState } from 'react'
 
 import { useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
+import { ThreadReviewPanel } from './components/ThreadReviewPanel'
 import type { RunStatus, TaskAcceptedResponse } from './types'
-
-const UNSUPPORTED_INTERRUPT_LABELS: Record<string, string> = {
-  low_match_score: '低分匹配审核',
-  interview_answer: '面试回答',
-  interview_evaluation_unavailable: '面试评价不可用处理',
-}
-
-function unsupportedInterruptMessage(type: string) {
-  const label = UNSUPPORTED_INTERRUPT_LABELS[type] ?? '人工审核'
-  return `当前有一个待处理的${label}任务。该交互表单尚未实现，请通过其他方式处理。`
-}
 
 function App() {
   const [jdText, setJdText] = useState(
@@ -23,7 +13,6 @@ function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [finalReviewFeedback, setFinalReviewFeedback] = useState('')
 
   const progress = useAgentProgress(sessionId)
   const review = useThreadReview(threadId, sessionId)
@@ -147,35 +136,7 @@ function App() {
         </div>
       </section>
 
-      {review.state?.interrupt ? (
-        <section className="panel">
-          <h2>人工审核</h2>
-          {review.state.interrupt.type === 'final_review' ? (
-            <div className="actions-row">
-              <button type="button" className="primary-action" disabled={review.isResuming} onClick={() => void review.resume({ action: 'approve' })}>
-                {review.isResuming ? '提交中...' : '核可'}
-              </button>
-              <label className="field-label" htmlFor="final-review-feedback">
-                驳回反馈
-              </label>
-              <textarea
-                id="final-review-feedback"
-                className="jd-input"
-                value={finalReviewFeedback}
-                onChange={(event) => setFinalReviewFeedback(event.target.value)}
-                rows={3}
-                disabled={review.isResuming}
-              />
-              <button type="button" disabled={review.isResuming || !finalReviewFeedback.trim()} onClick={() => void review.resume({ action: 'reject', feedback: finalReviewFeedback.trim() })}>
-                驳回
-              </button>
-            </div>
-          ) : (
-            <p className="error-text">{unsupportedInterruptMessage(review.state.interrupt.type)}</p>
-          )}
-          {review.error ? <p className="error-text">{review.error}</p> : null}
-        </section>
-      ) : null}
+      {review.state?.interrupt ? <ThreadReviewPanel interrupt={review.state.interrupt} isResuming={review.isResuming} error={review.error ? { message: review.error } : null} onResume={(command) => void review.resume(command)} /> : null}
 
       <section className="panel timeline-panel">
         <h2>事件轨迹</h2>

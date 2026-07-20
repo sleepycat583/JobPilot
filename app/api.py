@@ -265,6 +265,20 @@ def create_app(
             with app.state.dependencies.session_factory() as session:
                 repository = ResumeIdempotencyRepository(session)
                 record = repository.get(thread_id=thread_id, idempotency_key=idempotency_key)
+                for active_record in repository.list_processing(thread_id=thread_id):
+                    if record is not None and active_record.id == record.id:
+                        continue
+                    if not repository.reclaim_expired_lease(active_record):
+                        return _error_response(
+                            ApiError(code="RESUME_IN_PROGRESS", message="Another resume request is already processing for this thread"),
+                            status_code=409,
+                        )
+                    repository.mark_failed(
+                        active_record,
+                        error_code="RESUME_LEASE_EXPIRED",
+                        error_message="Previous resume processing lease expired before a final response was stored",
+                        review_audit_id=active_record.review_audit_id,
+                    )
                 if record is not None:
                     if record.command_fingerprint != fingerprint:
                         return _error_response(ApiError(code="IDEMPOTENCY_KEY_REUSED", message="Idempotency key was used with a different command"), status_code=409)

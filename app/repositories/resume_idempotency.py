@@ -73,6 +73,17 @@ class ResumeIdempotencyRepository:
             select(ResumeIdempotencyRecord).filter_by(thread_id=thread_id, idempotency_key=idempotency_key)
         )
 
+    def list_processing(self, *, thread_id: str) -> list[ResumeIdempotencyRecord]:
+        """读取线程当前仍持有处理租约的记录，供线程级 resume 互斥检查使用。"""
+
+        return list(
+            self._session.scalars(
+                select(ResumeIdempotencyRecord)
+                .filter_by(thread_id=thread_id, status="processing")
+                .order_by(ResumeIdempotencyRecord.id)
+            )
+        )
+
     def reclaim_expired_lease(
         self, entity: ResumeIdempotencyRecord, *, now: datetime | None = None
     ) -> bool:

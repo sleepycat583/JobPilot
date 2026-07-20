@@ -376,6 +376,40 @@ def test_resume_recovers_checkpoint_session_without_client_header() -> None:
     assert response.json()["session_id"] == session_id
 
 
+def test_thread_state_returns_current_interrupt_for_refresh_recovery() -> None:
+    with _client_for(task_queue=["jd_parse"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        response = client.get(f"/v1/threads/{thread_id}/state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "interrupted"
+    assert payload["review_status"] == "in_review"
+    assert payload["interrupt"]["type"] == "final_review"
+    assert payload["interrupt"]["accepted_actions"] == ["approve", "reject"]
+
+
+def test_thread_state_returns_completed_checkpoint_without_interrupt() -> None:
+    with _client_for(task_queue=["jd_parse"]) as client:
+        initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT})
+        thread_id = initial.json()["thread_id"]
+        client.post(f"/v1/threads/{thread_id}/resume", json={"action": "approve"})
+        response = client.get(f"/v1/threads/{thread_id}/state")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["interrupt"] is None
+
+
+def test_thread_state_rejects_unknown_thread() -> None:
+    with _client_for() as client:
+        response = client.get("/v1/threads/not-found/state")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CHECKPOINT_NOT_FOUND"
+
+
 def test_resume_persists_review_audit_for_approve_action(tmp_path: Path) -> None:
     client, database_path = _client_with_business_db(tmp_path, task_queue=["jd_parse"])
     with client:

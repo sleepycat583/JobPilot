@@ -221,6 +221,25 @@ def create_app(
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    @app.get("/v1/threads/{thread_id}/state")
+    def get_thread_state(thread_id: str) -> JSONResponse:
+        """读取线程当前状态，供刷新后的前端恢复 HITL 表单。
+
+        返回：
+            Checkpoint 存在时返回当前业务状态；仅线程不存在时返回
+            `CHECKPOINT_NOT_FOUND`。完成线程以 `status=completed` 返回。
+        """
+
+        graph = app.state.dependencies.graph
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = _safe_get_state(graph, config)
+        if snapshot is None or not snapshot.values:
+            return _error_response(
+                ApiError(code="CHECKPOINT_NOT_FOUND", message="No checkpoint exists for this thread"),
+                status_code=404,
+            )
+        return JSONResponse(status_code=200, content=_snapshot_state_payload(snapshot, thread_id=thread_id))
+
     @app.post("/v1/threads/{thread_id}/resume")
     def resume_hitl(thread_id: str, command: dict[str, Any]) -> JSONResponse:
         """恢复当前线程的低分、面试或最终核可 HITL 节点。"""
@@ -331,6 +350,31 @@ def _state_response(
     else:
         payload["status"] = "completed"
     return JSONResponse(status_code=200, content=payload)
+
+
+def _snapshot_state_payload(snapshot: Any, *, thread_id: str) -> dict[str, Any]:
+    """将 Checkpoint snapshot 映射为刷新恢复所需的稳定线程状态 DTO。
+
+    参数：
+        snapshot: 由 `graph.get_state` 返回的 LangGraph 快照。
+        thread_id: 路由参数中的线程标识。
+    返回：
+        可供前端判断终态或按 interrupt payload 重建审核表单的 JSON 数据。
+    """
+
+    values = getattr(snapshot, "values", {})
+    if not isinstance(values, dict):
+        values = {}
+    interrupt_payload = _extract_interrupt(snapshot)
+    return {
+        "thread_id": thread_id,
+        "session_id": _session_id_from_snapshot(snapshot),
+        "status": "interrupted" if interrupt_payload is not None else "completed",
+        "review_status": values.get("review_status"),
+        "review_target": values.get("review_target"),
+        "current_node": values.get("current_node"),
+        "interrupt": _serialize(interrupt_payload) if interrupt_payload is not None else None,
+    }
 
 
 def _resolve_session_id(candidate: str | None) -> str | None:

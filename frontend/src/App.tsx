@@ -4,6 +4,17 @@ import { useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
 import type { RunStatus, TaskAcceptedResponse } from './types'
 
+const UNSUPPORTED_INTERRUPT_LABELS: Record<string, string> = {
+  low_match_score: '低分匹配审核',
+  interview_answer: '面试回答',
+  interview_evaluation_unavailable: '面试评价不可用处理',
+}
+
+function unsupportedInterruptMessage(type: string) {
+  const label = UNSUPPORTED_INTERRUPT_LABELS[type] ?? '人工审核'
+  return `当前有一个待处理的${label}任务。该交互表单尚未实现，请通过其他方式处理。`
+}
+
 function App() {
   const [jdText, setJdText] = useState(
     '后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。',
@@ -148,7 +159,7 @@ function App() {
               </button>
             </div>
           ) : (
-            <p className="error-text">当前 interrupt 类型将在 Task 11 提供专用表单。</p>
+            <p className="error-text">{unsupportedInterruptMessage(review.state.interrupt.type)}</p>
           )}
           {review.error ? <p className="error-text">{review.error}</p> : null}
         </section>

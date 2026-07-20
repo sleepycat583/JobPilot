@@ -41,7 +41,13 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
     const active = threadId && sessionId ? { threadId, sessionId } : readStoredThread()
     if (!active) return
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(active))
-    void loadState(active.threadId).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '恢复状态失败。'))
+    // 通过异步回调读取远端状态，避免 effect 同步派生 React 状态。
+    const timer = window.setTimeout(() => {
+      void loadState(active.threadId).catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : '恢复状态失败。')
+      })
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [loadState, sessionId, threadId])
 
   const resume = useCallback(async (command: Record<string, string>) => {

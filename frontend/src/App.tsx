@@ -1,6 +1,7 @@
 /** 求职分析工作台入口。 */
 import { useState } from 'react'
 
+import { useAgentProgress } from './hooks/useAgentProgress'
 import type { ApiErrorResponse, TaskAcceptedResponse } from './types'
 
 // TODO(Step 11): 删除本地 Resume/JDParsed/MatchResult/Analysis 缩减类型
@@ -63,6 +64,9 @@ function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const fileName = resumes.find((item) => item.resume_version === resumeVersion)?.file_name ?? '未选择'
 
+  // SSE 进度（Step 8）：仅当 sessionId 存在时订阅事件流
+  const progress = useAgentProgress(sessionId)
+
   /**
    * 启动分析：POST /api/tasks → 保存 session_id/thread_id。
    *
@@ -115,7 +119,22 @@ function App() {
       <div className="tabs" role="tablist" aria-label="分析结果"><button type="button" role="tab" aria-selected={tab === 'jd'} className={tab === 'jd' ? 'active' : ''} onClick={() => setTab('jd')}>JD 解析</button><button type="button" role="tab" aria-selected={tab === 'match'} className={tab === 'match' ? 'active' : ''} onClick={() => setTab('match')}>匹配结果</button></div>
       {state === 'loading' && <div className="state-card loading-state"><span className="spinner" />正在解析 JD 与检索简历证据...</div>}{state === 'error' && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}{state === 'empty' && <div className="state-card empty-state">请上传并完成索引后，再选择简历进行匹配。</div>}
       {result && state !== 'loading' && state !== 'error' && state !== 'empty' && (tab === 'jd' ? <JDResult data={result.jd_parsed} /> : <MatchResultView data={result.match_result} />)}</section>
-    <aside className="progress-sidebar" aria-label="执行进度"><h2>执行进度</h2><ol className="progress-list"><li className="done"><span>✓</span>正在解析 JD</li><li className={state === 'review' ? 'current' : state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>等待审核</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>检索简历证据</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>生成匹配结果</li></ol>
+    <aside className="progress-sidebar" aria-label="执行进度"><h2>执行进度</h2>
+      {progress.status === 'idle' ? (
+        <ol className="progress-list"><li className="done"><span>✓</span>正在解析 JD</li><li className={state === 'review' ? 'current' : state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>等待审核</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>检索简历证据</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>生成匹配结果</li></ol>
+      ) : (
+        <ol className="progress-list">
+          {progress.completedNodes.map((node) => (
+            <li key={node} className="done"><span>✓</span>{node}</li>
+          ))}
+          {progress.currentNode && (
+            <li className="current"><span />{progress.currentNode}</li>
+          )}
+          {progress.status === 'failed' && progress.errorMessage && (
+            <li className="error"><span>✗</span>{progress.errorMessage}</li>
+          )}
+        </ol>
+      )}
       {state === 'review' && <section className="review-notice"><strong><i />待人工审核 · JD解析</strong><p>JD 解析结果已生成，请核对左侧岗位信息是否准确后再继续匹配。</p><div><button type="button" className="primary-button" onClick={() => setState('completed')}>批准</button><button type="button" className="secondary-button" onClick={() => void analyze()}>驳回并重试</button></div><small>驳回会重新生成解析结果，暂不支持按具体意见修改</small></section>}{state === 'completed' && <p className="completion-note">审核已通过，匹配结果已生成。</p>}<div className="disabled-tools"><div>模拟面试<span>功能开发中</span></div><div>历史记录<span>功能开发中</span></div></div>{threadId && <footer>thread_id: {threadId}<br />checkpoint: sqlite · resumable</footer>}</aside>
   </main>
 }

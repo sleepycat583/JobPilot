@@ -1,8 +1,26 @@
 /** 求职分析工作台关键交互测试。 */
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+
+/** jsdom 没有原生 EventSource，全局 stub（useAgentProgress 在 App 中自动调用） */
+class EventSourceStub {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSED = 2
+  url: string
+  readyState = 1
+  onerror: (() => void) | null = null
+  constructor(url: string) { this.url = url }
+  addEventListener() {}
+  removeEventListener() {}
+  close() { this.readyState = 2 }
+}
+
+beforeAll(() => {
+  vi.stubGlobal('EventSource', EventSourceStub)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()

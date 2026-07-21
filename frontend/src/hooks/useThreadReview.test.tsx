@@ -47,4 +47,48 @@ describe('useThreadReview', () => {
     expect(result.current.state).toBeNull()
     expect(result.current.idempotencyKey).toBeNull()
   })
+
+  it('surfaces the error code when resume is rejected with 409', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('key-1') })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'jd_parsed', current_node: 'review', interrupt: firstInterrupt }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: { code: 'IDEMPOTENCY_KEY_REUSED', message: '幂等键已被使用，请刷新页面。' } }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useThreadReview(null, null))
+    await act(async () => { await result.current.loadState('thread-1') })
+    expect(result.current.idempotencyKey).toBe('key-1')
+
+    await act(async () => { await result.current.resume({ action: 'approve' }) })
+    expect(result.current.error?.code).toBe('IDEMPOTENCY_KEY_REUSED')
+    expect(result.current.error?.message).toContain('幂等键已被使用')
+  })
+
+  it('reports a fallback conflict message for 409 without a backend error body', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('key-1') })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'jd_parsed', current_node: 'review', interrupt: firstInterrupt }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({}), // 无 error 字段
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useThreadReview(null, null))
+    await act(async () => { await result.current.loadState('thread-1') })
+
+    await act(async () => { await result.current.resume({ action: 'approve' }) })
+    expect(result.current.error?.message).toContain('请求冲突')
+  })
 })

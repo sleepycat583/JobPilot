@@ -89,8 +89,13 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idempotency_key: idempotencyKey, command }),
       })
+      // 业务规则：409 表示幂等键冲突或恢复请求仍在处理中，
+      // 不应重试（同一 key + command 会继续 409），需刷新页面获取新 key。
       if (!response.ok) {
-        throw buildApiError(await response.json().catch(() => null), '审核提交失败。')
+        const fallback = response.status === 409
+          ? '请求冲突：该审核指令已提交或正在处理中，请刷新页面。'
+          : '审核提交失败。'
+        throw buildApiError(await response.json().catch(() => null), fallback)
       }
       const next = (await response.json()) as ThreadStateResponse
       applyState(next)

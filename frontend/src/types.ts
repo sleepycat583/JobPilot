@@ -123,3 +123,17 @@ export type ThreadStateResponse = {
   current_node: string | null
   interrupt: ThreadInterrupt | null
 }
+
+/** POST /api/tasks 和 POST /v1/job-analysis 共用请求体 */
+export type JobAnalysisRequest = {
+  jd_text: string
+  resume_version?: string
+}
+
+/** 后端统一错误响应格式（第 0 章全局约束） */
+export type ApiErrorResponse = {
+  error: {
+    code: string
+    message: string
+  }
+}

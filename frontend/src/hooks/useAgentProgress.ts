@@ -175,11 +175,17 @@ export function useAgentProgress(sessionId: string | null) {
       return () => eventSource.removeEventListener(eventName, handler as EventListener)
     })
 
+    // 业务规则：EventSource 网络断开后会自动携带 Last-Event-ID 重连。
+    // 仅当浏览器放弃重连（readyState === CLOSED）时才视为致命错误；
+    // transient 错误（CONNECTING）不干预，避免阻断 SSE 断线续传。
+    // 注意：EventSource API 不支持自定义 HTTP Header，X-Session-ID 通过
+    // URL 路径 /api/sessions/{session_id}/events 传递，后端据此识别会话。
     eventSource.onerror = () => {
-      dispatch({ type: 'error', message: 'SSE 连接中断，请重新发起任务或刷新订阅。' })
-      eventSource.close()
-      if (eventSourceRef.current === eventSource) {
-        eventSourceRef.current = null
+      if (eventSource.readyState === EventSource.CLOSED) {
+        dispatch({ type: 'error', message: 'SSE 连接中断，请重新发起任务或刷新订阅。' })
+        if (eventSourceRef.current === eventSource) {
+          eventSourceRef.current = null
+        }
       }
     }
 

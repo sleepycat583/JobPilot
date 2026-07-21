@@ -1,166 +1,58 @@
-import { useMemo, useState } from 'react'
+/** 求职分析工作台入口；当前使用内存 mock，后续由 FastAPI 接口替换。 */
+import { useState } from 'react'
 
-import { useAgentProgress } from './hooks/useAgentProgress'
-import { useThreadReview } from './hooks/useThreadReview'
-import { ThreadReviewPanel } from './components/ThreadReviewPanel'
-import type { RunStatus, TaskAcceptedResponse } from './types'
+import type { ApiErrorResponse, JobAnalysisRequest } from './types'
 
-function App() {
-  const [jdText, setJdText] = useState(
-    '后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。',
-  )
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [threadId, setThreadId] = useState<string | null>(null)
-  const [requestError, setRequestError] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+// TODO(Step 7): State 迁移为 RunStatus + activityStatus 双状态机
+// TODO(Step 11): 删除本地 Resume/JDParsed/MatchResult/Analysis 缩减类型
+type Resume = { resume_version: string; file_name: string; index_status: 'indexed' | 'failed' }
+type JDParsed = { job_title: string; responsibilities: string[]; skills: { name: string; evidence: string }[]; experience_requirements: string[] }
+type MatchResult = { total_score: number; strengths: string[]; gaps: string[]; recommendations: string[]; resume_version: string }
+type Analysis = { jd_parsed: JDParsed; match_result: MatchResult }
+type State = 'review' | 'loading' | 'completed' | 'error' | 'empty'
 
-  const progress = useAgentProgress(sessionId)
-  const review = useThreadReview(threadId, sessionId)
+const resumes: Resume[] = [
+  { resume_version: 'v3', file_name: 'resume_v3.pdf', index_status: 'indexed' },
+  { resume_version: 'v2', file_name: 'resume_v2.pdf', index_status: 'indexed' },
+  { resume_version: 'draft', file_name: 'resume_draft.docx', index_status: 'failed' },
+]
+const initialJD = '负责 AI Agent 相关产品的后端开发，要求熟悉 LangGraph/LangChain，具备 RAG 系统搭建经验...'
+const defaultResult: Analysis = { jd_parsed: { job_title: 'AI Agent 后端工程师', responsibilities: ['AI Agent 产品后端开发', 'RAG 系统搭建'], skills: [{ name: 'LangGraph、LangChain、RAG、Python', evidence: '原文第 2 段要求熟悉 LangGraph/LangChain' }], experience_requirements: ['未在原文中明确提及，标记为待澄清'] }, match_result: { total_score: 82, strengths: ['具备 Python 后端开发经验'], gaps: ['LangGraph 项目证据不足'], recommendations: ['补充 LangGraph 编排与中断恢复的项目描述'], resume_version: 'v3' } }
 
-  const statusTone = useMemo<Record<RunStatus, string>>(
-    () => ({
-      idle: 'muted',
-      running: 'running',
-      interrupted: 'warning',
-      resuming: 'running',
-      completed: 'success',
-      failed: 'danger',
-    }),
-    [],
-  )
-
-  async function handleStartRun() {
-    setIsSubmitting(true)
-    setRequestError(null)
-
-    try {
-      const response = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jd_text: jdText }),
-      })
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          | { error?: { message?: string } }
-          | null
-        throw new Error(payload?.error?.message ?? '任务启动失败，请检查后端是否已运行。')
-      }
-
-      const payload = (await response.json()) as TaskAcceptedResponse
-      setSessionId(payload.session_id)
-      setThreadId(payload.thread_id)
-    } catch (error) {
-      setRequestError(
-        error instanceof Error ? error.message : '任务启动失败，请检查前后端服务状态。',
-      )
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  return (
-    <main className="app-shell">
-      <section className="composer">
-        <div className="section-heading">
-          <h1>Agent Progress Console</h1>
-          <p>发起异步任务后，当前连接会实时展示 Graph 节点事件。</p>
-        </div>
-
-        <label className="field-label" htmlFor="jd-text">
-          JD 文本
-        </label>
-        <textarea
-          id="jd-text"
-          className="jd-input"
-          value={jdText}
-          onChange={(event) => setJdText(event.target.value)}
-          rows={8}
-          placeholder="请输入岗位描述，随后点击启动任务。"
-        />
-
-        <div className="actions-row">
-          <button
-            type="button"
-            className="primary-action"
-            onClick={handleStartRun}
-            disabled={isSubmitting || !jdText.trim()}
-          >
-            {isSubmitting ? '启动中...' : '启动异步任务'}
-          </button>
-          <span className={`status-pill ${statusTone[progress.status]}`}>
-            {progress.status}
-          </span>
-        </div>
-
-        {requestError ? <p className="error-text">{requestError}</p> : null}
-        {progress.errorMessage ? <p className="error-text">{progress.errorMessage}</p> : null}
-      </section>
-
-      <section className="overview-grid">
-        <div className="panel">
-          <h2>运行概览</h2>
-          <dl className="meta-list">
-            <div>
-              <dt>session_id</dt>
-              <dd>{sessionId ?? '-'}</dd>
-            </div>
-            <div>
-              <dt>thread_id</dt>
-              <dd>{threadId ?? progress.threadId ?? '-'}</dd>
-            </div>
-            <div>
-              <dt>当前节点</dt>
-              <dd>{progress.currentNode ?? '-'}</dd>
-            </div>
-            <div>
-              <dt>最后事件 ID</dt>
-              <dd>{progress.lastEventId ?? '-'}</dd>
-            </div>
-            <div>
-              <dt>SSE 连接</dt>
-              <dd>{progress.isConnected ? 'connected' : 'idle'}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="panel">
-          <h2>已完成节点</h2>
-          <ul className="node-list">
-            {progress.completedNodes.length === 0 ? (
-              <li className="empty-state">尚无已完成节点</li>
-            ) : (
-              progress.completedNodes.map((node) => <li key={node}>{node}</li>)
-            )}
-          </ul>
-        </div>
-      </section>
-
-      {review.state?.interrupt ? <ThreadReviewPanel interrupt={review.state.interrupt} isResuming={review.isResuming} error={review.error} onResume={(command) => void review.resume(command)} onRetry={review.retry} onRefresh={() => void review.loadState(review.state?.thread_id ?? '').catch(() => undefined)} /> : null}
-
-      <section className="panel timeline-panel">
-        <h2>事件轨迹</h2>
-        <ul className="timeline-list">
-          {progress.events.length === 0 ? (
-            <li className="empty-state">启动任务后，SSE 事件会按到达顺序显示在这里。</li>
-          ) : (
-            progress.events.map((event) => (
-              <li key={event.event_id} className="timeline-item">
-                <div className="timeline-head">
-                  <strong>{event.event}</strong>
-                  <span>{event.timestamp}</span>
-                </div>
-                <div className="timeline-body">
-                  <span>node: {event.node ?? '-'}</span>
-                  <span>detail: {event.detail ?? event.input_summary ?? '-'}</span>
-                </div>
-              </li>
-            ))
-          )}
-        </ul>
-      </section>
-    </main>
-  )
+/** 模拟 JD 分析，字段与后端 JDParsed、MatchResult Schema 对齐。 */
+function mockAnalyzeJob(jd_text: string, resume_version: string): Promise<Analysis> {
+  // TODO: 对接 POST /api/tasks、GET /api/sessions/{session_id}/events 与线程状态接口。
+  return new Promise((resolve, reject) => window.setTimeout(() => {
+    if (jd_text.includes('[error]')) return reject(new Error('模拟解析失败，请修改 JD 后重试。'))
+    if (!jd_text.trim()) return reject(new Error('请先填写岗位描述。'))
+    resolve({ ...defaultResult, match_result: { ...defaultResult.match_result, resume_version } })
+  }, 850))
 }
 
+function App() {
+  const [jdText, setJdText] = useState(initialJD)
+  const [resumeVersion, setResumeVersion] = useState('v3')
+  const [tab, setTab] = useState<'jd' | 'match'>('jd')
+  const [state, setState] = useState<State>('review')
+  const [result, setResult] = useState<Analysis | null>(defaultResult)
+  const [error, setError] = useState<string | null>(null)
+  const fileName = resumes.find((item) => item.resume_version === resumeVersion)?.file_name ?? '未选择'
+
+  async function analyze() {
+    setState('loading'); setError(null); setResult(null)
+    try { setResult(await mockAnalyzeJob(jdText, resumeVersion)); setTab('jd'); setState('review') }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '分析失败，请重试。'); setState('error') }
+  }
+  return <main className="workbench">
+    <aside className="resume-sidebar" aria-label="简历库"><h1>简历库</h1><div className="resume-list">{resumes.map((resume) => <button key={resume.resume_version} type="button" className={`resume-item ${resumeVersion === resume.resume_version ? 'selected' : ''}`} onClick={() => setResumeVersion(resume.resume_version)}><strong>{resume.file_name}</strong><span className={`resume-status ${resume.index_status}`}><i />{resume.index_status === 'indexed' ? `已索引 · ${resume.resume_version}` : '索引失败'}</span></button>)}</div><button type="button" className="upload-button" onClick={() => setState('empty')}><span>＋</span>上传新版本简历</button></aside>
+    <section className="analysis-area"><label htmlFor="jd-input" className="input-label">粘贴职位描述（JD）</label><textarea id="jd-input" className="jd-input" value={jdText} onChange={(event) => setJdText(event.target.value)} aria-label="职位描述" /><div className="analysis-action-row"><p>将匹配: <b>{fileName}</b><span>（不选则仅做 JD 解析）</span></p><button type="button" className="primary-button" onClick={() => void analyze()} disabled={state === 'loading'}>{state === 'loading' ? '分析中...' : '开始分析'}</button></div>
+      <div className="tabs" role="tablist" aria-label="分析结果"><button type="button" role="tab" aria-selected={tab === 'jd'} className={tab === 'jd' ? 'active' : ''} onClick={() => setTab('jd')}>JD 解析</button><button type="button" role="tab" aria-selected={tab === 'match'} className={tab === 'match' ? 'active' : ''} onClick={() => setTab('match')}>匹配结果</button></div>
+      {state === 'loading' && <div className="state-card loading-state"><span className="spinner" />正在解析 JD 与检索简历证据...</div>}{state === 'error' && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}{state === 'empty' && <div className="state-card empty-state">请上传并完成索引后，再选择简历进行匹配。</div>}
+      {result && state !== 'loading' && state !== 'error' && state !== 'empty' && (tab === 'jd' ? <JDResult data={result.jd_parsed} /> : <MatchResultView data={result.match_result} />)}</section>
+    <aside className="progress-sidebar" aria-label="执行进度"><h2>执行进度</h2><ol className="progress-list"><li className="done"><span>✓</span>正在解析 JD</li><li className={state === 'review' ? 'current' : state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>等待审核</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>检索简历证据</li><li className={state === 'completed' ? 'done' : ''}><span>{state === 'completed' ? '✓' : ''}</span>生成匹配结果</li></ol>
+      {state === 'review' && <section className="review-notice"><strong><i />待人工审核 · JD解析</strong><p>JD 解析结果已生成，请核对左侧岗位信息是否准确后再继续匹配。</p><div><button type="button" className="primary-button" onClick={() => setState('completed')}>批准</button><button type="button" className="secondary-button" onClick={() => void analyze()}>驳回并重试</button></div><small>驳回会重新生成解析结果，暂不支持按具体意见修改</small></section>}{state === 'completed' && <p className="completion-note">审核已通过，匹配结果已生成。</p>}<div className="disabled-tools"><div>模拟面试<span>功能开发中</span></div><div>历史记录<span>功能开发中</span></div></div><footer>thread_id: 3a91-f2e<br />checkpoint: sqlite · resumable</footer></aside>
+  </main>
+}
+function JDResult({ data }: { data: JDParsed }) { return <section className="result-card"><h2>岗位信息</h2><dl><div><dt>核心技能</dt><dd>{data.skills.map((skill) => skill.name).join('、')}<em>证据: {data.skills[0]?.evidence}</em></dd></div><div><dt>职责</dt><dd>{data.responsibilities.join('、')}</dd></div><div><dt>经验要求</dt><dd>{data.experience_requirements.join('；')}</dd></div></dl></section> }
+function MatchResultView({ data }: { data: MatchResult }) { return <section className="result-card match-card"><h2>匹配结果 <b>{data.total_score}</b></h2><dl><div><dt>优势</dt><dd>{data.strengths.join('、')}</dd></div><div><dt>待提升</dt><dd>{data.gaps.join('、')}</dd></div><div><dt>建议</dt><dd>{data.recommendations.join('；')}</dd></div></dl></section> }
 export default App

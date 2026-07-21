@@ -146,7 +146,7 @@ function App() {
           interrupt={review.state.interrupt}
           isResuming={review.isResuming}
           error={review.error}
-          onResume={() => { /* Step 10 接入 */ }}
+          onResume={(command: ThreadReviewCommand) => { void review.resume(command) }}
           onRetry={review.retry}
           onRefresh={() => { void review.loadState(review.state!.thread_id) }}
         />

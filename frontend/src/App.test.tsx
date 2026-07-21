@@ -103,4 +103,51 @@ describe('App', () => {
     await screen.findByRole('heading', { name: '岗位信息' })
     expect(screen.getByRole('heading', { name: '岗位信息' })).toBeInTheDocument()
   })
+
+  /** Step 10: ThreadReviewPanel 核可 → POST /v1/threads/:id/resume */
+  it('approves via ThreadReviewPanel with resume POST and idempotency_key', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('idem-test-key') })
+    const fetchMock = vi.fn()
+      // POST /api/tasks → 202
+      .mockResolvedValueOnce({
+        ok: true, status: 202,
+        json: async () => ({ session_id: 'ses-1', thread_id: 'thr-1', status: 'accepted' }),
+      })
+      // GET /v1/threads/thr-1/state → interrupted with final_review
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          thread_id: 'thr-1', session_id: 'ses-1', status: 'interrupted',
+          review_status: 'in_review', review_target: 'jd_parsed', current_node: 'review',
+          interrupt: { type: 'final_review', target: 'jd_parsed', accepted_actions: ['approve', 'reject'], draft: {} },
+        }),
+      })
+      // POST /v1/threads/:id/resume → 200 with completed
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          thread_id: 'thr-1', session_id: 'ses-1', status: 'completed',
+          review_status: 'approved', review_target: 'jd_parsed', current_node: null, interrupt: null,
+        }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    // 发起任务
+    await user.click(screen.getByRole('button', { name: '开始分析' }))
+    // 等待 ThreadReviewPanel 渲染
+    await screen.findByRole('heading', { name: '人工审核' })
+    // 点击核可
+    await user.click(screen.getByRole('button', { name: '核可' }))
+
+    // 确认 POST resume 携带 idempotency_key 和 command
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/threads/thr-1/resume',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ idempotency_key: 'idem-test-key', command: { action: 'approve' } }),
+      }),
+    )
+  })
 })

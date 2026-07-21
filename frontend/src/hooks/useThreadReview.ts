@@ -28,6 +28,13 @@ function readStoredThread(): StoredThread | null {
   }
 }
 
+/** 构造带可选 X-Session-ID 的 HTTP header（第 0 章全局约束） */
+function buildHeaders(sessionId: string | null): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (sessionId) headers['X-Session-ID'] = sessionId
+  return headers
+}
+
 export function useThreadReview(threadId: string | null, sessionId: string | null) {
   const [state, setState] = useState<ThreadStateResponse | null>(null)
   const [isResuming, setIsResuming] = useState(false)
@@ -35,6 +42,9 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const lastCommandRef = useRef<ThreadReviewCommand | null>(null)
   const interruptFingerprintRef = useRef<string | null>(null)
+  // 保持 sessionId 最新引用，避免闭包 stale（loadState/resume 中用于 Header）
+  const sessionIdRef = useRef(sessionId)
+  sessionIdRef.current = sessionId
 
   const applyState = useCallback((payload: ThreadStateResponse) => {
     const fingerprint = payload.interrupt ? JSON.stringify(payload.interrupt) : null
@@ -51,7 +61,7 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
   }, [])
 
   const loadState = useCallback(async (id: string) => {
-    const response = await fetch(`/v1/threads/${id}/state`)
+    const response = await fetch(`/v1/threads/${id}/state`, { headers: buildHeaders(sessionIdRef.current) })
     if (!response.ok) {
       const error = buildApiError(await response.json().catch(() => null), '无法恢复当前审核状态。')
       if (error.code === 'CHECKPOINT_NOT_FOUND' || response.status === 404) {
@@ -86,7 +96,7 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
     setError(null)
     try {
       const response = await fetch(`/v1/threads/${state.thread_id}/resume`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: buildHeaders(sessionIdRef.current),
         body: JSON.stringify({ idempotency_key: idempotencyKey, command }),
       })
       // 业务规则：409 表示幂等键冲突或恢复请求仍在处理中，

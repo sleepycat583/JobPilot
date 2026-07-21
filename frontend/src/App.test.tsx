@@ -46,11 +46,18 @@ describe('App', () => {
 
   /** Step 7: analyze() 发起 POST /api/tasks，保存 session_id/thread_id */
   it('submits to POST /api/tasks and stores session/thread on 202', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 202,
-      json: async () => ({ session_id: 'ses-1', thread_id: 'thr-1', status: 'accepted' }),
-    })
+    const fetchMock = vi.fn()
+      // POST /api/tasks → 202
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({ session_id: 'ses-1', thread_id: 'thr-1', status: 'accepted' }),
+      })
+      // GET /v1/threads/thr-1/state → completed（useThreadReview 自动加载）
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 'thr-1', session_id: 'ses-1', status: 'completed', review_status: null, review_target: null, current_node: null, interrupt: null }),
+      })
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
     render(<App />)
@@ -62,7 +69,7 @@ describe('App', () => {
       '/api/tasks',
       expect.objectContaining({ method: 'POST' }),
     )
-    // 确认 session_id 存入 sessionStorage（parseApiError 作为 header 被调用时也应检查）
+    // 确认 session_id 存入 sessionStorage
     const persisted = sessionStorage.getItem('job-assistant.x-session-id')
     expect(persisted).toBe('ses-1')
   })

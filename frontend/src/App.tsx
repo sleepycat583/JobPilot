@@ -2,7 +2,9 @@
 import { useState } from 'react'
 
 import { useAgentProgress } from './hooks/useAgentProgress'
-import type { ApiErrorResponse, TaskAcceptedResponse } from './types'
+import { useThreadReview } from './hooks/useThreadReview'
+import { ThreadReviewPanel } from './components/ThreadReviewPanel'
+import type { ApiErrorResponse, TaskAcceptedResponse, ThreadReviewCommand } from './types'
 
 // TODO(Step 11): 删除本地 Resume/JDParsed/MatchResult/Analysis 缩减类型
 type Resume = { resume_version: string; file_name: string; index_status: 'indexed' | 'failed' }
@@ -66,6 +68,9 @@ function App() {
 
   // SSE 进度（Step 8）：仅当 sessionId 存在时订阅事件流
   const progress = useAgentProgress(sessionId)
+
+  // 线程审核状态（Step 9）：当 SSE 同步了 threadId 或已有持久化 thread 时加载
+  const review = useThreadReview(threadId ?? progress.threadId, sessionId ?? progress.sessionId)
 
   /**
    * 启动分析：POST /api/tasks → 保存 session_id/thread_id。
@@ -135,7 +140,20 @@ function App() {
           )}
         </ol>
       )}
-      {state === 'review' && <section className="review-notice"><strong><i />待人工审核 · JD解析</strong><p>JD 解析结果已生成，请核对左侧岗位信息是否准确后再继续匹配。</p><div><button type="button" className="primary-button" onClick={() => setState('completed')}>批准</button><button type="button" className="secondary-button" onClick={() => void analyze()}>驳回并重试</button></div><small>驳回会重新生成解析结果，暂不支持按具体意见修改</small></section>}{state === 'completed' && <p className="completion-note">审核已通过，匹配结果已生成。</p>}<div className="disabled-tools"><div>模拟面试<span>功能开发中</span></div><div>历史记录<span>功能开发中</span></div></div>{threadId && <footer>thread_id: {threadId}<br />checkpoint: sqlite · resumable</footer>}</aside>
+      {/* 真实线程审核（Step 9）: useThreadReview 加载的 interrupt 优先于本地 mock 审核 */}
+      {review.state?.interrupt ? (
+        <ThreadReviewPanel
+          interrupt={review.state.interrupt}
+          isResuming={review.isResuming}
+          error={review.error}
+          onResume={() => { /* Step 10 接入 */ }}
+          onRetry={review.retry}
+          onRefresh={() => { void review.loadState(review.state!.thread_id) }}
+        />
+      ) : state === 'review' ? (
+        <section className="review-notice"><strong><i />待人工审核 · JD解析</strong><p>JD 解析结果已生成，请核对左侧岗位信息是否准确后再继续匹配。</p><div><button type="button" className="primary-button" onClick={() => setState('completed')}>批准</button><button type="button" className="secondary-button" onClick={() => void analyze()}>驳回并重试</button></div><small>驳回会重新生成解析结果，暂不支持按具体意见修改</small></section>
+      ) : null}
+      {state === 'completed' && <p className="completion-note">审核已通过，匹配结果已生成。</p>}<div className="disabled-tools"><div>模拟面试<span>功能开发中</span></div><div>历史记录<span>功能开发中</span></div></div>{threadId && <footer>thread_id: {threadId}<br />checkpoint: sqlite · resumable</footer>}</aside>
   </main>
 }
 function JDResult({ data }: { data: JDParsed }) { return <section className="result-card"><h2>岗位信息</h2><dl><div><dt>核心技能</dt><dd>{data.skills.map((skill) => skill.name).join('、')}<em>证据: {data.skills[0]?.evidence}</em></dd></div><div><dt>职责</dt><dd>{data.responsibilities.join('、')}</dd></div><div><dt>经验要求</dt><dd>{data.experience_requirements.join('；')}</dd></div></dl></section> }

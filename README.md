@@ -1,10 +1,23 @@
-# Job Assistant
+# JobPilot
 
-基于 LangGraph Supervisor-Worker 架构的求职辅助系统。已完成 JD 结构化解析、基于 Chroma 证据的简历匹配、确定性评分、低分审核 Gate、模拟面试与最终核可、Graph 原生有序任务队列，并通过 FastAPI HTTP、异步任务和 SSE 事件流提供可测试的调用入口。
+基于 LangGraph Supervisor-Worker 架构的求职多智能体辅助系统。核心能力：JD 结构化解析、Chroma 证据驱动的简历匹配、确定性五维评分、低分人工审核 Gate、模拟面试 + 复盘报告、Graph 原生有序任务队列。通过 FastAPI HTTP 接口、异步任务和 SSE 实时事件流对外提供服务，前端使用 React + Vite + TypeScript。
+
+> 🧠 Supervisor 负责意图路由和任务编排，Worker 代理分别处理 JD 解析、简历匹配、面试模拟；中断点（Interrupt）支持人工核可（HITL），Checkpoint 保证状态持久与恢复。
+
+## 技术栈
+
+| 层 | 技术 |
+|---|------|
+| Agent 编排 | LangGraph (Supervisor-Worker)，SQLite Checkpoint |
+| LLM | OpenAI-compatible API（默认 DeepSeek） |
+| 向量检索 | ChromaDB + `BAAI/bge-m3` Embedding |
+| 后端 | Python 3.11+ / FastAPI / SQLAlchemy + Alembic |
+| 前端 | React 19 / TypeScript 6 / Vite 8 |
+| 测试 | pytest (244 tests) / Vitest |
 
 ## 当前状态
 
-当前已实现：
+已完成：
 
 - Pydantic Schema、配置校验与 OpenAI-compatible Chat/固定 `BAAI/bge-m3` Provider 边界。
 - Supervisor 意图路由、有序 `task_queue` 消费、JD Parser、公司背景搜索适配器与结构化输出重试/降级。
@@ -12,7 +25,7 @@
 - 确定性五维匹配评分；`total_score < 60.0` 时进入 `review_status="in_review"` 的低分 Gate。
 - `POST /v1/job-analysis`：只传 `jd_text` 解析 JD；额外传 `resume_version` 时由一次 Graph 调用顺序执行 JD 解析和简历匹配。响应包含 `jd_parsed`、`match_result`、审核状态、执行轨迹和 `error_log`。
 
-后续范围或当前占位：
+进行中 / 计划中：
 
 - 模拟面试主流程已实现：面试计划、问题生成、回答评价、rolling summary、复盘报告生成、降级处理和最终人工核可均已接入 Graph；完整浏览器端 interrupt 交互表单、刷新恢复和重复提交幂等的端到端验证仍未完成。
 - 已实现基础 SSE 节点级实时进度展示和 React/Vite 进度骨架；HITL 交互表单尚未接入，SSE 断线补发/`Last-Event-ID` 尚未实现。
@@ -29,11 +42,23 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-复制 `.env.example` 为 `.env`，并填写模型、Chroma 目录和 Embedding device 配置。随后启动：
+复制 `.env.example` 为 `.env`，并填写模型、Chroma 目录和 Embedding device 配置。
+
+### 后端
 
 ```bash
 uvicorn app.api:app --reload
 ```
+
+### 前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite 开发服务器默认运行在 `http://localhost:5173`，API 请求自动代理到后端 `http://127.0.0.1:8000`。
 
 请求示例：
 

@@ -10,6 +10,14 @@ describe('ThreadReviewPanel', () => {
     expect(screen.getByRole('button', { name: '驳回' })).toBeDisabled()
     expect(screen.getByLabelText('驳回反馈')).toBeDisabled()
   })
+  it('renders the frozen JD draft fields before approval', () => {
+    const jdInterrupt = { ...interrupt, draft: { job_title: 'Python 后端工程师', seniority: 'mid', company_name: null, responsibilities: ['负责接口设计'], skills: [{ name: 'Python' }], experience_requirements: ['3 年经验'], education_requirements: ['本科'], ambiguities: [] } }
+    render(<ThreadReviewPanel interrupt={jdInterrupt} isResuming={false} error={null} onResume={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: 'JD 解析草稿' })).toBeInTheDocument()
+    expect(screen.getByText('Python 后端工程师')).toBeInTheDocument()
+    expect(screen.getByText('负责接口设计')).toBeInTheDocument()
+    expect(screen.getByText('Python')).toBeInTheDocument()
+  })
   it.each(['IDEMPOTENCY_KEY_REUSED', 'RESUME_IN_PROGRESS', 'CHECKPOINT_NOT_FOUND', 'HITL_COMMAND_INVALID', 'GRAPH_EXECUTION_FAILED'])('shows %s error', (code) => {
     render(<ThreadReviewPanel interrupt={interrupt} isResuming={false} error={{ code, message: '失败' }} onResume={vi.fn()} />)
     expect(screen.getByRole('alert')).toBeInTheDocument()

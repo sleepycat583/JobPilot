@@ -67,6 +67,7 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
             ],
         }
 
+    jd_recovery_required = _has_jd_extraction_failure(state)
     prompt_context = StructuredPromptContext(
         full_prompt=_build_supervisor_prompt(stripped_input, state),
         minimal_input=stripped_input,
@@ -83,7 +84,11 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
         }
 
     decision = result.value
-    if decision.confidence < 0.70:
+    if jd_recovery_required:
+        # JD Worker 已提供最小降级对象；此处只允许 Supervisor 要求补充或结束，避免重入解析循环。
+        if decision.route not in {"clarify", "out_of_scope"}:
+            decision = decision.model_copy(update={"route": "clarify", "task_queue": []})
+    elif decision.confidence < 0.70:
         decision = RouterDecision(
             route="clarify",
             confidence=decision.confidence,
@@ -116,7 +121,18 @@ def _build_supervisor_prompt(user_input: str, state: JobAssistantState) -> str:
         f"Recent conversation messages: {recent_messages}\n"
         f"Has JD: {state.get('jd_parsed') is not None}\n"
         f"Has match: {state.get('match_result') is not None}\n"
-        f"Interview active: {state.get('interview_state') is not None}"
+        f"Interview active: {state.get('interview_state') is not None}\n"
+        f"JD extraction recovery required: {_has_jd_extraction_failure(state)}\n"
+        "If JD extraction recovery is required, choose only clarify (ask user to paste a complete JD) "
+        "or out_of_scope (end the request); do not dispatch a Worker."
+    )
+
+
+def _has_jd_extraction_failure(state: JobAssistantState) -> bool:
+    """判断当前是否为 JD Worker 降级后的 Supervisor 恢复调用。"""
+    return any(
+        entry.get("node") == "jd_parser" and entry.get("code") == "JD_EXTRACTION_UNAVAILABLE"
+        for entry in state.get("error_log", [])
     )
 
 

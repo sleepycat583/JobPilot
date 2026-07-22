@@ -52,6 +52,19 @@ function App() {
     })
   }, [progress.status, progress.threadId, review.loadState])
 
+  useEffect(() => {
+    if (!threadId || progress.status !== 'running' || review.state?.interrupt) return
+
+    // 异步任务刚受理时，首次状态查询可能早于 Graph 写入 interrupt；SSE 若因
+    // 开发代理重连等原因未送达 interrupt_required，轮询 Checkpoint 仍可恢复审核表单。
+    const timer = window.setInterval(() => {
+      void review.loadState(threadId).catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : '无法读取审核状态。')
+      })
+    }, 800)
+    return () => window.clearInterval(timer)
+  }, [progress.status, review.loadState, review.state?.interrupt, threadId])
+
   /**
    * POST /api/tasks 启动异步分析，保存 202 返回的 session_id/thread_id。
    *
@@ -103,6 +116,10 @@ function App() {
       <button type="button" className="upload-button" disabled>
         <span>＋</span>上传新版本简历
       </button>
+      <div className="disabled-tools">
+        <div>模拟面试<span>功能开发中</span></div>
+        <div>历史记录<span>功能开发中</span></div>
+      </div>
     </aside>
 
     <section className="analysis-area">
@@ -118,6 +135,19 @@ function App() {
       </div>
       {progress.status === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
       {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}
+      {review.state?.interrupt ? (
+        <ThreadReviewPanel
+          interrupt={review.state.interrupt}
+          isResuming={review.isResuming}
+          error={review.error}
+          onResume={(command: ThreadReviewCommand) => { void review.resume(command) }}
+          onRetry={review.retry}
+          onRefresh={() => { void review.loadState(review.state!.thread_id) }}
+        />
+      ) : progress.status === 'completed' ? (
+        <p className="completion-note">任务已完成。</p>
+      ) : null}
+      {threadId && <footer className="thread-footer">thread_id: {threadId}</footer>}
     </section>
 
     <aside className="progress-sidebar" aria-label="执行进度">
@@ -136,24 +166,6 @@ function App() {
         </ol>
       )}
 
-      {review.state?.interrupt ? (
-        <ThreadReviewPanel
-          interrupt={review.state.interrupt}
-          isResuming={review.isResuming}
-          error={review.error}
-          onResume={(command: ThreadReviewCommand) => { void review.resume(command) }}
-          onRetry={review.retry}
-          onRefresh={() => { void review.loadState(review.state!.thread_id) }}
-        />
-      ) : progress.status === 'completed' ? (
-        <p className="completion-note">任务已完成。</p>
-      ) : null}
-
-      <div className="disabled-tools">
-        <div>模拟面试<span>功能开发中</span></div>
-        <div>历史记录<span>功能开发中</span></div>
-      </div>
-      {threadId && <footer>thread_id: {threadId}</footer>}
     </aside>
   </main>
 }

@@ -1,9 +1,8 @@
 """JD 解析 Agent。
 
-本文件实现文档 §3.2 冻结的 JD 解析职责：
-- 复用结构化输出重试服务进行 JD 抽取
-- 仅在识别到明确公司名且用户授权时调用公司背景搜索 Tool
-- 对模型结果执行确定性门卫校验，阻止 evidence 缺失或优先级误判进入下游状态
+本节点由 Supervisor 分发后调用：它通过 LangChain structured output 抽取冻结的
+``JDParsed``，执行原文证据门卫校验，并仅在用户授权时调用公司搜索 Tool。
+它不负责简历匹配、评分或后续业务路由。
 """
 
 from __future__ import annotations
@@ -15,12 +14,15 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.schemas.jd import JDParseInput, JDParsed, SkillRequirement
 from app.schemas.state import ErrorEntry, ExecutionEvent, JobAssistantState
-from app.services.structured_output import StructuredPromptContext, call_with_structured_output
+from app.services.observability import redact_text
 from app.tools.company_search import CompanySearchItem, SearchBackend, search_company_background
 
 CONTENT_INSUFFICIENT_CODE = "JD_CONTENT_INSUFFICIENT"
 EXTRACTION_UNAVAILABLE_CODE = "JD_EXTRACTION_UNAVAILABLE"
 WEB_SEARCH_DEGRADED_CODE = "WEB_SEARCH_DEGRADED"
+MAX_EXTRACTION_ATTEMPTS = 2
+UNLOCATABLE_SKILLS_MESSAGE = "未能从JD原文中定位到可靠的技能要求,建议人工检查原始JD。"
+EXTRACTION_UNAVAILABLE_MESSAGE = "请重新粘贴完整的职位描述，建议包含岗位名称、职责和任职要求；系统不会根据不完整信息猜测技能要求。"
 
 
 def jd_parser_node(
@@ -43,32 +45,28 @@ def jd_parser_node(
         jd_text=str(state.get("user_input", "")),
         allow_web_search=bool(state.get("allow_web_search", False)),
     )
-    prompt_context = StructuredPromptContext(
-        full_prompt=_build_jd_prompt(jd_input),
-        minimal_input=jd_input.jd_text,
-    )
-    result = call_with_structured_output(chat_model, JDParsed, prompt_context, "jd_parser")
+    parsed, retry_count, extraction_errors = _extract_jd_with_retry(chat_model, jd_input)
 
-    if result.value is None:
+    if parsed is None:
         jd_parsed = _build_technical_degraded_result(jd_input)
         return {
             "jd_parsed": jd_parsed,
             "current_node": "jd_parser",
-            "retry_count": {"jd_parser": result.retry_count},
-            "error_log": list(result.error_log)
+            "retry_count": {"jd_parser": retry_count},
+            "error_log": extraction_errors
             + [
                 _build_error_entry(
                     code=EXTRACTION_UNAVAILABLE_CODE,
                     message="JD structured extraction was unavailable after all retries",
                     retryable=False,
-                    attempt=result.retry_count,
+                    attempt=retry_count,
                 )
             ],
             "execution_history": [_build_event("jd_parser", "success", "technical_degraded_manual_review_required")],
         }
 
-    gated = _apply_guardrails(result.value, jd_input.jd_text)
-    error_log = list(result.error_log)
+    gated = _apply_guardrails(parsed, jd_input.jd_text)
+    error_log = extraction_errors
     execution_detail = "parsed"
 
     if _is_content_insufficient(gated):
@@ -78,7 +76,7 @@ def jd_parser_node(
                 code=CONTENT_INSUFFICIENT_CODE,
                 message="JD does not contain enough concrete requirements for resume matching",
                 retryable=False,
-                attempt=result.retry_count,
+                attempt=retry_count,
             )
         )
 
@@ -104,7 +102,7 @@ def jd_parser_node(
     return {
         "jd_parsed": gated,
         "current_node": "jd_parser",
-        "retry_count": {"jd_parser": result.retry_count},
+        "retry_count": {"jd_parser": retry_count},
         "error_log": error_log,
         "execution_history": [_build_event("jd_parser", "success", execution_detail)],
     }
@@ -114,7 +112,7 @@ def _build_jd_prompt(jd_input: JDParseInput) -> str:
     """构造 JD 抽取 Prompt。"""
 
     return (
-        "You are a JD parser. Return only a JSON object that matches JDParsed.\n"
+        "You are a JD parser. Extract only facts supported by the JD text.\n"
         "Every skill must include evidence quoted from the original JD text.\n"
         "Use priority=must only for explicit hard requirements such as 必须, 要求, 熟练掌握, 3年以上.\n"
         "Use priority=preferred for 优先, 加分, 熟悉者优先 and similar wording.\n"
@@ -124,6 +122,54 @@ def _build_jd_prompt(jd_input: JDParseInput) -> str:
         f"Allow web search: {jd_input.allow_web_search}\n"
         f"JD text:\n{jd_input.jd_text}"
     )
+
+
+def _extract_jd_with_retry(
+    chat_model: BaseChatModel,
+    jd_input: JDParseInput,
+) -> tuple[JDParsed | None, int, list[ErrorEntry]]:
+    """用 Pydantic 结构化输出抽取 JD，最多调用两次。
+
+    参数：
+        chat_model: 支持 ``with_structured_output`` 的 LangChain 聊天模型。
+        jd_input: 已完成基础长度校验的 JD 输入。
+
+    返回：
+        ``(parsed, retry_count, errors)``。两次都失败时 ``parsed`` 为 ``None``，
+        调用方据此构造可审计的最小降级对象，而不让异常中断 LangGraph。
+    """
+    structured_model = chat_model.with_structured_output(JDParsed)
+    prompt = _build_jd_prompt(jd_input)
+    errors: list[ErrorEntry] = []
+
+    for attempt in range(MAX_EXTRACTION_ATTEMPTS):
+        try:
+            result = structured_model.invoke(prompt)
+            if not isinstance(result, JDParsed):
+                # 正常 LangChain 实现会返回 JDParsed；此处也保护不规范 Provider/Mock。
+                result = JDParsed.model_validate(result)
+            return result, attempt, errors
+        # Provider 超时、网络断连和 Tool Calling 参数校验都会以不同异常类型暴露；
+        # 节点必须把它们收敛为可审计降级结果，不能中断整张 LangGraph。
+        except Exception as exc:
+            errors.append(
+                _build_error_entry(
+                    code="LLM_SCHEMA_INVALID",
+                    message=str(exc),
+                    retryable=attempt < MAX_EXTRACTION_ATTEMPTS - 1,
+                    attempt=attempt,
+                )
+            )
+            if attempt == MAX_EXTRACTION_ATTEMPTS - 1:
+                break
+            # structured output 已绑定 Schema；重试只补充事实约束，不退回文本 JSON 解析。
+            prompt = (
+                f"{_build_jd_prompt(jd_input)}\n"
+                "上次结构化提取未通过校验。请仅输出能由原文支持的字段："
+                "缺失信息使用空列表或 null，不得虚构技能证据。"
+            )
+
+    return None, MAX_EXTRACTION_ATTEMPTS - 1, errors
 
 
 def _apply_guardrails(parsed: JDParsed, jd_text: str) -> JDParsed:
@@ -151,6 +197,11 @@ def _apply_guardrails(parsed: JDParsed, jd_text: str) -> JDParsed:
             "ambiguities": ambiguities,
         }
     )
+
+    if not normalized.skills and UNLOCATABLE_SKILLS_MESSAGE not in normalized.ambiguities:
+        normalized = normalized.model_copy(
+            update={"ambiguities": normalized.ambiguities + [UNLOCATABLE_SKILLS_MESSAGE]}
+        )
 
     if not normalized.skills and not _has_meaningful_requirements(normalized):
         normalized = normalized.model_copy(
@@ -195,12 +246,12 @@ def _has_meaningful_requirements(parsed: JDParsed) -> bool:
 def _build_technical_degraded_result(jd_input: JDParseInput) -> JDParsed:
     """构造结构化抽取连续失败后的最小 JDParsed。
 
-    只保留可由原文固定标记直接确认的岗位名称；技能、职责等需要语义判断的
-    字段一律留空，避免将猜测当作结构化事实传入下游。
+    降级路径不使用关键词或正则猜测岗位标题；需要语义判断的字段一律留空，
+    避免将猜测当作结构化事实传入下游。
     """
 
     return JDParsed(
-        job_title=_extract_explicit_job_title(jd_input.jd_text),
+        job_title="unknown",
         seniority="unknown",
         company_name=None,
         responsibilities=[],
@@ -210,25 +261,11 @@ def _build_technical_degraded_result(jd_input: JDParseInput) -> JDParsed:
         interview_focus=[],
         company_context=[],
         ambiguities=[
-            f"{EXTRACTION_UNAVAILABLE_CODE}: 结构化抽取连续失败；未能可靠确认的字段已留空，必须人工核可"
+            f"{EXTRACTION_UNAVAILABLE_CODE}: 自动解析未能可靠完成。",
+            EXTRACTION_UNAVAILABLE_MESSAGE,
         ],
         source_language=jd_input.language,
     )
-
-
-def _extract_explicit_job_title(jd_text: str) -> str:
-    """从显式“岗位/职位”标记提取标题，未命中时返回 unknown。
-
-    不使用模型或宽泛关键词猜测，确保重试耗尽时仅保留可定位的原文事实。
-    """
-
-    for marker in ("岗位：", "职位：", "岗位:", "职位:"):
-        if marker not in jd_text:
-            continue
-        candidate = jd_text.split(marker, 1)[1].splitlines()[0].strip(" ，。；;：:")
-        if candidate:
-            return candidate[:80]
-    return "unknown"
 
 
 def _is_content_insufficient(parsed: JDParsed) -> bool:
@@ -260,7 +297,7 @@ def _build_error_entry(code: str, message: str, retryable: bool, attempt: int) -
     return {
         "code": code,
         "node": "jd_parser",
-        "message": message,
+        "message": redact_text(message),
         "retryable": retryable,
         "attempt": attempt,
         "timestamp": datetime.now(timezone.utc).isoformat(),

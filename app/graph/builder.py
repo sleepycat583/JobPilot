@@ -155,7 +155,11 @@ def build_graph(
     graph.add_conditional_edges(
         "jd_parser",
         _guard_route("jd_parser", _resolve_jd_completion_route),
-        {"prepare_review": "prepare_final_review", "error": "error_node"},
+        {
+            "prepare_review": "prepare_final_review",
+            "supervisor_recovery": "supervisor",
+            "error": "error_node",
+        },
     )
     _add_guarded_edge(graph, "prepare_final_review", "final_review_gate")
     graph.add_conditional_edges(
@@ -288,10 +292,16 @@ def _resolve_queue_dispatch_route(state: JobAssistantState) -> str:
 
 
 def _resolve_jd_completion_route(state: JobAssistantState) -> str:
-    """阻断降级 JD；成功产物必须先通过最终核可才可消费下一项。"""
+    """仅为 JD 降级结果选择后续路径，不影响其他 Worker 的错误分支。"""
 
-    error_codes = {entry.get("code") for entry in state.get("error_log", [])}
-    if {CONTENT_INSUFFICIENT_CODE, EXTRACTION_UNAVAILABLE_CODE} & error_codes:
+    latest_jd_error_codes = {
+        entry.get("code")
+        for entry in state.get("error_log", [])
+        if entry.get("node") == "jd_parser"
+    }
+    if EXTRACTION_UNAVAILABLE_CODE in latest_jd_error_codes:
+        return "supervisor_recovery"
+    if CONTENT_INSUFFICIENT_CODE in latest_jd_error_codes:
         return "error"
     return "prepare_review"
 

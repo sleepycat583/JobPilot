@@ -14,7 +14,7 @@ from app.agents.jd_parser import (
     WEB_SEARCH_DEGRADED_CODE,
     jd_parser_node,
 )
-from app.schemas.jd import JDParseInput
+from app.schemas.jd import JDParseInput, JDParsed
 
 
 @dataclass
@@ -31,6 +31,21 @@ class FakeChatModel:
 
     def bind(self, **_: Any) -> "FakeChatModel":
         return self
+
+    def with_structured_output(self, schema: type[JDParsed]) -> "StructuredFakeChatModel":
+        assert schema is JDParsed
+        return StructuredFakeChatModel(self, schema)
+
+
+@dataclass
+class StructuredFakeChatModel:
+    """模拟 LangChain 已绑定 Pydantic Schema 的模型，不走手工 JSON 解析链路。"""
+
+    parent: FakeChatModel
+    schema: type[JDParsed]
+
+    def invoke(self, prompt: str) -> JDParsed:
+        return self.schema.model_validate_json(self.parent.invoke(prompt))
 
 
 def test_jd_parser_extracts_skills_with_original_evidence() -> None:
@@ -122,29 +137,40 @@ def test_jd_parser_does_not_fabricate_skills_for_content_insufficient_jd() -> No
 
 
 def test_jd_parser_marks_technical_degradation_separately_from_content_insufficient() -> None:
-    jd_text = "职位：后端工程师\n要求熟悉 Python、FastAPI，3年以上后端开发经验，负责接口设计与性能优化。"
-    model = FakeChatModel(["Authorization: Bearer sk-sensitive user@example.com " + "x" * 600, "still-not-json", "bad-output"])
+    jd_text = "要求熟悉 Python、FastAPI，3年以上后端开发经验，负责接口设计与性能优化。"
+    model = FakeChatModel(["still-not-json", "bad-output"])
 
     result = jd_parser_node({"user_input": jd_text}, model)
     jd_parsed = result["jd_parsed"]
 
-    assert model.invoke_calls == 3
-    assert jd_parsed.job_title == "后端工程师"
+    assert model.invoke_calls == 2
+    assert jd_parsed.job_title == "unknown"
+    assert jd_parsed.seniority == "unknown"
     assert jd_parsed.skills == []
     assert any(item.startswith(f"{EXTRACTION_UNAVAILABLE_CODE}:") for item in jd_parsed.ambiguities)
     assert not any(item.startswith(f"{CONTENT_INSUFFICIENT_CODE}:") for item in jd_parsed.ambiguities)
-    assert len(result["error_log"]) == 4
+    assert len(result["error_log"]) == 3
     assert result["error_log"][-1]["code"] == EXTRACTION_UNAVAILABLE_CODE
     assert all(entry["code"] == "LLM_SCHEMA_INVALID" for entry in result["error_log"][:-1])
     assert result["error_log"][-1]["retryable"] is False
-    assert result["retry_count"] == {"jd_parser": 2}
+    assert result["retry_count"] == {"jd_parser": 1}
     assert result["execution_history"][0]["detail"] == "technical_degraded_manual_review_required"
-    assert "必须人工核可" in jd_parsed.ambiguities[0]
-    first_excerpt = result["error_log"][0]["raw_output_excerpt"]
-    assert first_excerpt is not None
-    assert "sk-sensitive" not in first_excerpt
-    assert "user@example.com" not in first_excerpt
-    assert len(first_excerpt) <= 500
+    assert "自动解析未能可靠完成" in jd_parsed.ambiguities[0]
+    assert result["error_log"][0]["raw_output_excerpt"] is None
+
+
+def test_jd_parser_filters_unlocatable_skills_without_retry_or_error() -> None:
+    jd_text = "后端岗位，负责接口设计与性能优化，以及后端服务稳定性建设。"
+    model = FakeChatModel(
+        ['{"job_title":"后端工程师","seniority":"mid","company_name":null,"responsibilities":["负责接口设计与性能优化"],"skills":[{"name":"Python","category":"language","priority":"must","evidence":"熟悉 Python"}],"experience_requirements":[],"education_requirements":[],"interview_focus":[],"company_context":[],"ambiguities":[],"source_language":"zh-CN"}']
+    )
+
+    result = jd_parser_node({"user_input": jd_text}, model)
+
+    assert result["jd_parsed"].skills == []
+    assert "未能从JD原文中定位到可靠的技能要求,建议人工检查原始JD。" in result["jd_parsed"].ambiguities
+    assert result["retry_count"] == {"jd_parser": 0}
+    assert result["error_log"] == []
 
 
 def test_jd_parser_writes_only_jd_business_field() -> None:

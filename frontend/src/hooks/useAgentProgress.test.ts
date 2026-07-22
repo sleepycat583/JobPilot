@@ -79,7 +79,12 @@ const MockEventSourceCtor = class extends MockEventSource {
     super(url)
     instances.push(this)
   }
-} as unknown as typeof MockEventSource & (new (url: string) => MockEventSource)
+} as unknown as {
+  new (url: string): MockEventSource
+  CONNECTING: number
+  OPEN: number
+  CLOSED: number
+}
 MockEventSourceCtor.CONNECTING = MockEventSource.CONNECTING
 MockEventSourceCtor.OPEN = MockEventSource.OPEN
 MockEventSourceCtor.CLOSED = MockEventSource.CLOSED
@@ -119,7 +124,7 @@ describe('useAgentProgress', () => {
     setupMockEventSource()
     const { result, rerender } = renderHook(
       ({ id }: { id: string | null }) => useAgentProgress(id),
-      { initialProps: { id: 'session-1' } },
+      { initialProps: { id: 'session-1' as string | null } },
     )
     expect(result.current.status).toBe('running')
 

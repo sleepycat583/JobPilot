@@ -13,7 +13,7 @@
 
 ### 1.1 阶段目标与前置条件
 
-将 `App.tsx:mockAnalyzeJob()` 的 JD mock 替换为真实启动、结果读取和最终审核。先完成第 3 章的任务/线程状态通道，才能在页面中正确处理异步审批。
+已完成：`App.tsx:mockAnalyzeJob()` 已删除（`c4a0a2a`），JD 解析已替换为 `POST /api/tasks` 真实请求启动（`0b56316`）+ `useAgentProgress` SSE 进度（`b3571ba`）+ `useThreadReview` 状态读取与审核（`8a99e46`、`ee23c7f`）。第 3 章的任务/线程状态通道已就绪，页面可正确处理异步审批。
 
 ### 1.2 涉及的真实接口
 

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useReducer, useRef } from 'react'
 import type { AgentEvent, AgentEventName, AgentProgressState } from '../types'
 
 type ProgressAction =
-  | { type: 'connect'; sessionId: string }
+  | { type: 'connect'; sessionId: string; threadId: string }
   | { type: 'event'; payload: AgentEvent }
   | { type: 'error'; message: string }
   | { type: 'reset' }
@@ -51,7 +51,7 @@ function reducer(
   if (action.type === 'connect') {
     return {
       sessionId: action.sessionId,
-      threadId: null,
+      threadId: action.threadId,
       activeEventSourceSession: action.sessionId,
       status: 'running',
       currentNode: null,
@@ -72,6 +72,11 @@ function reducer(
   }
 
   const event = action.payload
+  // SSE 是 session 级通道。当前页面只展示本次提交的 thread，回放或并行任务事件
+  // 不能改变该任务的进度状态。
+  if (event.thread_id !== state.threadId || state.events.some((item) => item.event_id === event.event_id)) {
+    return state
+  }
   const completedNodes = [...state.completedNodes]
   const eventNode = event.node ?? null
 
@@ -141,12 +146,12 @@ function parseEvent(data: string): AgentEvent {
  * - React 18 StrictMode 会在开发环境重复挂载 effect。
  * - 这里用 ref 持有当前 EventSource，并在重建前显式关闭，避免重复 SSE 连接。
  */
-export function useAgentProgress(sessionId: string | null) {
+export function useAgentProgress(sessionId: string | null, threadId: string | null) {
   const [state, dispatch] = useReducer(reducer, initialState)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || !threadId) {
       eventSourceRef.current?.close()
       eventSourceRef.current = null
       dispatch({ type: 'reset' })
@@ -156,14 +161,14 @@ export function useAgentProgress(sessionId: string | null) {
     eventSourceRef.current?.close()
     const eventSource = new EventSource(`/api/sessions/${sessionId}/events`)
     eventSourceRef.current = eventSource
-    dispatch({ type: 'connect', sessionId })
+    dispatch({ type: 'connect', sessionId, threadId })
 
     const cleanupFns = EVENT_NAMES.map((eventName) => {
       const handler = (messageEvent: MessageEvent<string>) => {
         const payload = parseEvent(messageEvent.data)
         dispatch({ type: 'event', payload })
 
-        if (payload.event === 'run_completed' || payload.event === 'run_failed') {
+        if (payload.thread_id === threadId && (payload.event === 'run_completed' || payload.event === 'run_failed')) {
           eventSource.close()
           if (eventSourceRef.current === eventSource) {
             eventSourceRef.current = null
@@ -196,13 +201,13 @@ export function useAgentProgress(sessionId: string | null) {
         eventSourceRef.current = null
       }
     }
-  }, [sessionId])
+  }, [sessionId, threadId])
 
   return useMemo(
     () => ({
       ...state,
-      isConnected: Boolean(sessionId && state.activeEventSourceSession === sessionId),
+      isConnected: Boolean(sessionId && threadId && state.activeEventSourceSession === sessionId),
     }),
-    [sessionId, state],
+    [sessionId, state, threadId],
   )
 }

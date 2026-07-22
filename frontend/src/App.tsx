@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
 import { ThreadReviewPanel } from './components/ThreadReviewPanel'
+import { JDResultPanel } from './components/JDResultPanel'
 import type { ApiErrorResponse, TaskAcceptedResponse, ThreadReviewCommand } from './types'
 
 // TODO(第 2 章): 对接简历库接口，替换空数组
@@ -39,10 +40,26 @@ function App() {
   const fileName = EMPTY_RESUMES.find((r) => r.resume_version === resumeVersion)?.file_name ?? '未选择'
 
   // SSE 进度 — sessionId 存在时订阅事件流
-  const progress = useAgentProgress(sessionId)
+  const progress = useAgentProgress(sessionId, threadId)
 
   // 线程审核状态 — 从 SSE 同步 threadId 或持久化 thread 加载
   const review = useThreadReview(threadId ?? progress.threadId, sessionId ?? progress.sessionId)
+
+  /**
+   * 综合 SSE 和 REST API 两条通路推导统一状态。
+   *
+   * 为什么这样做：
+   *   SSE 事件可能因网络抖动或事件总线内部静默吞异常而丢失，
+   *   REST API 轮询拿到的 interrupt/completed 状态作为兜底，
+   *   确保"任务已受理"提示和按钮 disabled 不会永远卡在 running。
+   */
+  const effectiveStatus = (() => {
+    if (progress.status === 'idle') return 'idle'
+    if (review.state?.status === 'completed' || progress.status === 'completed') return 'completed'
+    if (review.state?.interrupt || progress.status === 'interrupted') return 'interrupted'
+    if (progress.status === 'failed' || (progress.status === 'running' && Boolean(progress.errorMessage))) return 'failed'
+    return progress.status
+  })()
 
   useEffect(() => {
     if (progress.status !== 'interrupted' || !progress.threadId) return
@@ -51,6 +68,26 @@ function App() {
       setError(cause instanceof Error ? cause.message : '无法读取审核状态。')
     })
   }, [progress.status, progress.threadId, review.loadState])
+
+  useEffect(() => {
+    if (!threadId || review.state?.jd_parsed || !progress.completedNodes.includes('jd_parser')) return
+
+    let cancelled = false
+    // 节点结束事件可能比 Checkpoint 可读早一个调度周期；有限重试只等待已完成的持久化写入。
+    const loadParsedResult = async () => {
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        try {
+          const state = await review.loadState(threadId)
+          if (state.jd_parsed || state.status === 'completed' || state.interrupt) return
+        } catch {
+          // 线程刚创建时 Checkpoint 尚不存在，等待下一次短重试。
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 150))
+      }
+    }
+    void loadParsedResult()
+    return () => { cancelled = true }
+  }, [progress.completedNodes, review.loadState, review.state?.jd_parsed, threadId])
 
   useEffect(() => {
     if (!threadId || progress.status !== 'running' || review.state?.interrupt) return
@@ -127,14 +164,15 @@ function App() {
       <textarea id="jd-input" className="jd-input" value={jdText} onChange={(e) => setJdText(e.target.value)} aria-label="职位描述" />
       <div className="analysis-action-row">
         <p>将匹配: <b>{fileName}</b><span>（不选则仅做 JD 解析）</span></p>
-        <button type="button" className="primary-button" onClick={() => void analyze()} disabled={progress.status === 'running'}>{progress.status === 'running' ? '分析中...' : '开始分析'}</button>
+        <button type="button" className="primary-button" onClick={() => void analyze()} disabled={effectiveStatus === 'running'}>{effectiveStatus === 'running' ? '分析中...' : '开始分析'}</button>
       </div>
       <div className="tabs" role="tablist" aria-label="分析结果">
         <button type="button" role="tab" aria-selected={tab === 'jd'} className={tab === 'jd' ? 'active' : ''} onClick={() => setTab('jd')}>JD 解析</button>
         <button type="button" role="tab" aria-selected={tab === 'match'} className={tab === 'match' ? 'active' : ''} onClick={() => setTab('match')}>匹配结果</button>
       </div>
-      {progress.status === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
+      {effectiveStatus === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
       {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}
+      {review.state?.jd_parsed ? <JDResultPanel result={review.state.jd_parsed} /> : null}
       {review.state?.interrupt ? (
         <ThreadReviewPanel
           interrupt={review.state.interrupt}
@@ -144,7 +182,7 @@ function App() {
           onRetry={review.retry}
           onRefresh={() => { void review.loadState(review.state!.thread_id) }}
         />
-      ) : progress.status === 'completed' ? (
+      ) : effectiveStatus === 'completed' ? (
         <p className="completion-note">任务已完成。</p>
       ) : null}
       {threadId && <footer className="thread-footer">thread_id: {threadId}</footer>}
@@ -157,9 +195,9 @@ function App() {
       ) : (
         <ol className="progress-list">
           {progress.completedNodes.map((node) => (
-            <li key={node} className="done"><span>✓</span>{node}</li>
+            <li key={node} className="done"><span>✓</span>{progressLabel(node)}</li>
           ))}
-          {progress.currentNode && <li className="current"><span />{progress.currentNode}</li>}
+          {progress.currentNode && <li className="current"><span />{progressLabel(progress.currentNode)}</li>}
           {progress.status === 'failed' && progress.errorMessage && (
             <li className="error"><span>✗</span>{progress.errorMessage}</li>
           )}
@@ -168,6 +206,15 @@ function App() {
 
     </aside>
   </main>
+}
+
+function progressLabel(node: string): string {
+  const labels: Record<string, string> = {
+    rolling_summary: '准备上下文', supervisor: '识别任务', queue_dispatch: '分发任务',
+    jd_parser: '解析职位描述', prepare_final_review: '准备审核',
+    final_review_gate: '等待人工审核', finalize_node: '生成最终结果', api: '完成任务',
+  }
+  return labels[node] ?? node
 }
 
 export default App

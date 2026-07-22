@@ -34,7 +34,7 @@ from app.repositories.resume_idempotency import ResumeIdempotencyConflictError, 
 from app.repositories.review_audit import ReviewAuditRepository
 from app.schemas.review import HITLCommand, ResumeRequest
 from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
-from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger
+from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger, publish_run_completed_event
 from pydantic import TypeAdapter, ValidationError
 
 
@@ -360,6 +360,15 @@ def create_app(
                 node="api", node_kind="control", success=None,
             )
         )
+        _publish_graph_run_event(
+            event_bus=app.state.event_bus,
+            logger=configure_structured_logger(),
+            event_name="run_resumed",
+            session_id=session_id,
+            thread_id=thread_id,
+            detail="HITL_RESUME_ACCEPTED",
+            level="info",
+        )
         try:
             state = graph.invoke(Command(resume=validated_command.model_dump()), config=config)
         except Exception:
@@ -370,6 +379,15 @@ def create_app(
                 status_code=500,
             )
         _mark_review_audit_succeeded(app.state.dependencies.session_factory, audit_id)
+        # 发布 run_completed 事件到 SSE 总线，确保前端订阅收到终态通知
+        # （后台任务在首次 interrupt 时已退出，resume handler 必须补发）
+        if isinstance(state, dict) and state.get("final_output"):
+            publish_run_completed_event(
+                session_id=session_id,
+                thread_id=thread_id,
+                final_output=state["final_output"],
+                logger=configure_structured_logger(),
+            )
         response = _state_response(state, thread_id=thread_id, session_id=session_id, snapshot=_safe_get_state(graph, config))
         _mark_resume_idempotency_succeeded(app.state.dependencies.session_factory, thread_id, idempotency_key, response, audit_id)
         return response
@@ -444,14 +462,20 @@ def _snapshot_state_payload(snapshot: Any, *, thread_id: str) -> dict[str, Any]:
     if not isinstance(values, dict):
         values = {}
     interrupt_payload = _extract_interrupt(snapshot)
+    status = "interrupted" if interrupt_payload is not None else "running" if getattr(snapshot, "next", ()) else "completed"
     return {
         "thread_id": thread_id,
         "session_id": _session_id_from_snapshot(snapshot),
-        "status": "interrupted" if interrupt_payload is not None else "completed",
+        "status": status,
         "review_status": values.get("review_status"),
         "review_target": values.get("review_target"),
         "current_node": values.get("current_node"),
         "interrupt": _serialize(interrupt_payload) if interrupt_payload is not None else None,
+        # 仅返回已写入 Checkpoint 的结构化产物，供前端在节点完成后增量呈现；
+        # 不暴露原始 Prompt 或模型中间文本。
+        "jd_parsed": _serialize(values.get("jd_parsed")),
+        "match_result": _serialize(values.get("match_result")),
+        "final_output": _serialize(values.get("final_output")),
     }
 
 

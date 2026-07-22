@@ -60,6 +60,21 @@ export type AgentProgressState = {
   errorMessage: string | null
 }
 
+/** 后端 JDParsed 的前端只读映射；字段名与冻结的 Pydantic Schema 保持一致。 */
+export type JDParsed = {
+  job_title: string
+  seniority: string
+  company_name: string | null
+  responsibilities: string[]
+  skills: { name: string; category: string; priority: string; evidence: string }[]
+  experience_requirements: string[]
+  education_requirements: string[]
+  interview_focus: string[]
+  company_context: string[]
+  ambiguities: string[]
+  source_language: string
+}
+
 type InterruptBase = {
   target: string
   accepted_actions: string[]
@@ -117,11 +132,14 @@ export type ThreadReviewCommand =
 export type ThreadStateResponse = {
   thread_id: string
   session_id: string
-  status: 'interrupted' | 'completed'
+  status: 'running' | 'interrupted' | 'completed'
   review_status: string | null
   review_target: string | null
   current_node: string | null
   interrupt: ThreadInterrupt | null
+  jd_parsed?: JDParsed | null
+  match_result?: Record<string, unknown> | null
+  final_output?: Record<string, unknown> | null
 }
 
 /** POST /api/tasks 和 POST /v1/job-analysis 共用请求体 */

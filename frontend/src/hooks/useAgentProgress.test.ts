@@ -105,7 +105,7 @@ describe('useAgentProgress', () => {
 
   it('returns idle state when sessionId is null', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress(null))
+    const { result } = renderHook(() => useAgentProgress(null, null))
     expect(result.current.status).toBe('idle')
     expect(result.current.sessionId).toBeNull()
     expect(result.current.isConnected).toBe(false)
@@ -113,7 +113,7 @@ describe('useAgentProgress', () => {
 
   it('creates EventSource and connects when sessionId is provided', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
     expect(instances.length).toBe(1)
     expect(instances[0]!.url).toContain('/api/sessions/session-1/events')
     expect(result.current.status).toBe('running')
@@ -123,7 +123,7 @@ describe('useAgentProgress', () => {
   it('disconnects and resets when sessionId changes to null', () => {
     setupMockEventSource()
     const { result, rerender } = renderHook(
-      ({ id }: { id: string | null }) => useAgentProgress(id),
+      ({ id }: { id: string | null }) => useAgentProgress(id, id ? 'thread-1' : null),
       { initialProps: { id: 'session-1' as string | null } },
     )
     expect(result.current.status).toBe('running')
@@ -142,7 +142,7 @@ describe('useAgentProgress', () => {
     ['run_failed', 'failed'] as const,
   ])('transitions to %s on %s event', (eventName, expectedStatus) => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -156,7 +156,7 @@ describe('useAgentProgress', () => {
 
   it('tracks completedNodes from node_finished events', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -176,7 +176,7 @@ describe('useAgentProgress', () => {
 
   it('does not duplicate completedNodes for repeated node_finished', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -196,7 +196,7 @@ describe('useAgentProgress', () => {
 
   it('updates lastEventId from each event', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -210,7 +210,7 @@ describe('useAgentProgress', () => {
 
   it('closes EventSource on run_completed', () => {
     setupMockEventSource()
-    renderHook(() => useAgentProgress('session-1'))
+    renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -224,7 +224,7 @@ describe('useAgentProgress', () => {
 
   it('closes EventSource on run_failed', () => {
     setupMockEventSource()
-    renderHook(() => useAgentProgress('session-1'))
+    renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -238,7 +238,7 @@ describe('useAgentProgress', () => {
 
   it('does not dispatch error on transient SSE error (readyState !== CLOSED)', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     // readyState 默认为 OPEN (1)，模拟 transient 错误
     act(() => {
@@ -252,7 +252,7 @@ describe('useAgentProgress', () => {
 
   it('dispatches fatal error when browser gives up (readyState === CLOSED)', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     // 模拟浏览器放弃重连：先设 readyState 为 CLOSED，再触发 error
     instances[0]!.readyState = 2 // CLOSED
@@ -267,7 +267,7 @@ describe('useAgentProgress', () => {
 
   it('clears errorMessage when new events arrive after error', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     // 先触发致命错误
     instances[0]!.readyState = 2
@@ -277,14 +277,14 @@ describe('useAgentProgress', () => {
     expect(result.current.status).toBe('failed')
 
     // 重新挂载（模拟 sessionId 变化后新建连接）
-    const { result: result2 } = renderHook(() => useAgentProgress('session-2'))
+    const { result: result2 } = renderHook(() => useAgentProgress('session-2', 'thread-2'))
     expect(result2.current.errorMessage).toBeNull()
     expect(result2.current.status).toBe('running')
   })
 
   it('sets currentNode on node_started and clears on node_finished', () => {
     setupMockEventSource()
-    const { result } = renderHook(() => useAgentProgress('session-1'))
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
 
     act(() => {
       instances[0]!.emit(
@@ -301,5 +301,35 @@ describe('useAgentProgress', () => {
       )
     })
     expect(result.current.currentNode).toBeNull()
+  })
+
+  it('ignores buffered events from a different thread in the same session', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => {
+      instances[0]!.emit(
+        'node_started',
+        makeEvent({ thread_id: 'historic-thread', node: 'jd_parser' }),
+      )
+    })
+
+    expect(result.current.currentNode).toBeNull()
+    expect(result.current.events).toEqual([])
+  })
+
+  it('reconnects and resets progress when a new thread uses the same session', () => {
+    setupMockEventSource()
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) => useAgentProgress('session-1', threadId),
+      { initialProps: { threadId: 'thread-1' } },
+    )
+
+    act(() => instances[0]!.emit('node_finished', makeEvent({ event: 'node_finished', node: 'jd_parser' })))
+    rerender({ threadId: 'thread-2' })
+
+    expect(instances).toHaveLength(2)
+    expect(result.current.threadId).toBe('thread-2')
+    expect(result.current.completedNodes).toEqual([])
   })
 })

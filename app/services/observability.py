@@ -271,12 +271,40 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
+def publish_run_completed_event(
+    *,
+    session_id: str,
+    thread_id: str,
+    final_output: dict[str, Any],
+    logger: logging.Logger | None = None,
+) -> None:
+    """发布 run_completed 事件，供后台任务和同步 resume handler 共用。
+
+    为什么单独成函数：
+        `_maybe_publish_run_completed` 仅在后台任务 `_run_graph_in_background` 中被调用，
+        而 `resume_hitl` 是同步路由，需要同样的发布能力。抽出公开函数避免重复构造。
+    """
+    event_logger = logger or configure_structured_logger()
+    event = build_log_event(
+        event="run_completed",
+        session_id=session_id,
+        thread_id=thread_id,
+        node="api",
+        node_kind="control",
+        success=None,
+        detail=str(final_output.get("type", "final_output_ready")),
+    )
+    event_logger.info(event)
+    if _DEFAULT_EVENT_PUBLISHER is not None:
+        _DEFAULT_EVENT_PUBLISHER(event)
+
+
 def _publish_bus_event(source_event: Mapping[str, Any], *, mapped_event: str, detail: str) -> None:
     """尽力把日志同源事件额外发布到事件总线。
 
     为什么这样做：
         事件总线是附加的 SSE 基础设施，发布失败不得影响 Graph 正常执行或 JSONL 日志写入。
-        因此这里必须静默降级，只保留原有日志与业务语义。
+        但必须记录 warning 日志，避免静默吞异常导致前端状态长期卡死。
     """
 
     if _DEFAULT_EVENT_PUBLISHER is None:
@@ -287,4 +315,8 @@ def _publish_bus_event(source_event: Mapping[str, Any], *, mapped_event: str, de
         payload["detail"] = redact_text(detail)
         _DEFAULT_EVENT_PUBLISHER(payload)
     except Exception:
-        return
+        logging.getLogger("job_assistant").warning(
+            "Failed to publish event to SSE bus — frontend may miss state transition",
+            exc_info=True,
+            extra={"mapped_event": mapped_event},
+        )

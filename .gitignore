@@ -19,3 +19,24 @@ data/*.sqlite3
 data/*.sqlite3-shm
 data/*.sqlite3-wal
 data/*.log
+
+# === 2026-07-22 GitHub 同步前补充 ===
+# 日志文件（根目录级别）
+*.log
+# 第三个虚拟环境
+.venv-1/
+# 已被 git 跟踪过的数据库文件，防止重新添加
+data/experiments.sqlite3
+# macOS Finder 元数据
+.DS_Store
+# IDE 配置
+.vscode/
+.idea/
+# 前端构建产物（根级兜底）
+dist/
+build/
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+# 环境变量备份（防止 .env 副本被提交）
+.env.*
+!.env.example

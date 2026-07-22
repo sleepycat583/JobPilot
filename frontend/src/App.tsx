@@ -1,5 +1,5 @@
 /** 求职分析工作台入口，通过 /api/tasks + SSE + /v1/threads 对接后端。 */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
@@ -43,6 +43,14 @@ function App() {
 
   // 线程审核状态 — 从 SSE 同步 threadId 或持久化 thread 加载
   const review = useThreadReview(threadId ?? progress.threadId, sessionId ?? progress.sessionId)
+
+  useEffect(() => {
+    if (progress.status !== 'interrupted' || !progress.threadId) return
+    // interrupt_required 可能晚于首次 state 查询落盘；收到事件后再次读取，确保表单以 Checkpoint 为准。
+    void review.loadState(progress.threadId).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : '无法读取审核状态。')
+    })
+  }, [progress.status, progress.threadId, review.loadState])
 
   /**
    * POST /api/tasks 启动异步分析，保存 202 返回的 session_id/thread_id。

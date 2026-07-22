@@ -57,3 +57,68 @@ Week3 实际状态核实报告。
 - Task 8：Case1 归档导入和编号映射已验证；Case2/Case3 的真实实验记录仍需 Week4 规划与执行。
 - Task 11：已完成前端表单与组件测试；后续仅可补充真实后端联调或端到端证据，不改变本任务完成状态。
 - SSE：当前仅宣称基础实时事件流；断线补发和 `Last-Event-ID` 仍按架构文档 §16.5 保持未完成表述。
+
+## 六、2026-07-22 第 3 章收尾真实验证
+
+> 本节只记录本次实际执行的数据库、HTTP 与浏览器验证结果；不以单元测试或代码审查替代浏览器验收。
+
+### 6.1 迁移与 resume
+
+执行前 `alembic current` 未输出 revision，直接检查 `data/app.sqlite3` 发现 `alembic_version` 不存在。因此未执行的是完整业务迁移链，而非仅 resume 幂等表：`20260719_0001`、`20260720_0002`、`20260720_0003`。
+
+实际执行 `python -m alembic upgrade head` 后，revision 为 `20260720_0003 (head)`，`resume_idempotency_records` 表存在，SQLite 自动唯一索引对应 `(thread_id, idempotency_key)` 约束。
+
+使用 `scripts/verify_resume_http.py`（真实 FastAPI 路由、业务 SQLite 和 Checkpoint；外部模型替身）实际得到：
+
+| 场景 | 状态 | 实际结果 |
+|---|---|---|
+| final_review 首次 approve，使用新 UUIDv4 key | ✅ 已用真实请求验证通过 | 200，不再返回缺表 500 |
+| 同 key、同 command 重放 | ✅ 已用真实请求验证通过 | 200，返回首次成功响应缓存 |
+| 同 key、改变 command | ✅ 已用真实请求验证通过 | 409，`IDEMPOTENCY_KEY_REUSED` |
+
+同 key 改 command 的原始响应：
+
+```json
+{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"Idempotency key was used with a different command"}}
+```
+
+### 6.2 失败响应协议
+
+不存在 thread 的 state 请求实际返回：
+
+```json
+{"error":{"code":"CHECKPOINT_NOT_FOUND","message":"No checkpoint exists for this thread"}}
+```
+
+该响应符合协议，`parseApiError` 能读取 code 与 message。
+
+**独立缺口：**resume 请求体为非法 JSON（原文 `{`）时，FastAPI 422 原始响应为：
+
+```json
+{"detail":[{"type":"json_invalid","loc":["body",1],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting property name enclosed in double quotes"}}]}
+```
+
+它不符合 `{ "error": { "code", "message" } }`；`parseApiError` 无法取得 code/message，只能走 HTTP 422 的兜底文案。此问题与迁移缺失无关，应通过 `RequestValidationError` 全局异常处理单独修复。
+
+### 6.3 Playwright 浏览器验证
+
+本次新增并实际运行 `scripts/run_week3_browser_verification.mjs`，使用 Playwright Chromium、`scripts/verification_server.py` 和 `frontend/vite.verification.config.ts`。脚本实际模拟 `sessionStorage`、页面 reload 与离线/在线切换。
+
+| 场景 | 状态 | 真实运行结果 |
+|---|---|---|
+| interrupt 后刷新恢复 | ✅ 已用真实浏览器自动化脚本验证通过（附运行结果） | reload 后请求 `GET /v1/threads/{id}/state`，没有新的 `POST /api/tasks`，重新显示“人工审核 / 核可 / 驳回反馈 / 驳回”表单。 |
+| 任务执行中断网后恢复 | ❌ 已用真实浏览器自动化脚本验证失败 | 观察到 2 个 EventStream 请求，`Last-Event-ID` 均为 `null`；审核表单未恢复，无法证明事件无重复、无倒退。 |
+
+刷新场景实际结果摘要：
+
+```json
+{"refreshResult":{"formAfterReload":"人工审核\n核可驳回反馈驳回","refreshRequests":["GET /api/sessions/.../events","GET /v1/threads/.../state","GET /v1/threads/.../state"],"taskPostsBeforeReload":1,"passed":true}}
+```
+
+断线场景实际结果摘要：
+
+```json
+{"reconnectResult":{"eventStreamRequestCount":2,"lastEventIdHeaders":[null,null],"formRecovered":false,"passed":false}}
+```
+
+**独立 SSE 缺口：**`GET /api/sessions/{session_id}/events` 当前未读取 `Last-Event-ID`；`SessionEventBus.subscribe()` 也没有按最后 event id 精确补发。该能力不可标记为已验证通过。

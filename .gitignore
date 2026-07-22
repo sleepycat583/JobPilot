@@ -37,6 +37,8 @@ dist/
 build/
 # Jupyter Notebook 检查点
 .ipynb_checkpoints/
+# 架构设计文档（内部参考，不对外公开）
+09-求职多智能体辅助系统架构设计.md
 # 环境变量备份（防止 .env 副本被提交）
 .env.*
 !.env.example

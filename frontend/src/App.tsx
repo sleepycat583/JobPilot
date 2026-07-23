@@ -208,17 +208,17 @@ function App() {
 
     <aside className="progress-sidebar" aria-label="执行进度">
       <h2>执行进度</h2>
-      {progress.status === 'idle' ? (
+      {effectiveStatus === 'idle' ? (
         <p className="empty-hint">提交 JD 后在此查看实时进度。</p>
       ) : (
         <ol className="progress-list">
           {JD_PROGRESS_NODES.map((node) => {
             const nodeStatus = progress.nodeProgress[node]
-            return <li key={node} className={nodeStatus === 'completed' ? 'done' : nodeStatus === 'failed' ? 'error' : nodeStatus === 'interrupted' || nodeStatus === 'running' ? 'current' : ''}>
+            return <li key={node} className={nodeStatus === 'completed' ? 'done' : nodeStatus === 'failed' ? 'error' : nodeStatus === 'interrupted' || nodeStatus === 'running' ? 'current' : 'pending'}>
               <span>{nodeStatus === 'completed' ? '✓' : nodeStatus === 'failed' ? '✗' : ''}</span>{progressLabel(node)}
             </li>
           })}
-          {progress.status === 'failed' && progress.errorMessage && (
+          {effectiveStatus === 'failed' && progress.errorMessage && (
             <li className="error"><span>✗</span>{progress.errorMessage}</li>
           )}
         </ol>

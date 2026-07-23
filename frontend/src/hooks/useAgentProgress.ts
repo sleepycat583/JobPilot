@@ -25,8 +25,38 @@ export const JD_PROGRESS_NODES = [
 
 type NodeProgressMap = Record<string, NodeProgressStatus>
 
+const NODE_INDEX = new Map<string, number>(JD_PROGRESS_NODES.map((node, index) => [node, index]))
+
 function emptyNodeProgress(): NodeProgressMap {
   return Object.fromEntries(JD_PROGRESS_NODES.map((node) => [node, 'pending']))
+}
+
+/**
+ * 将流程推进到指定节点，并保持已经完成的节点不回退。
+ *
+ * 参数 node 是后端当前正在处理或刚处理完的固定流程节点；返回值是新的
+ * 节点状态投影。这里按固定流程补齐前置节点，是为了在 SSE 事件丢失、或
+ * Checkpoint 比事件更晚到达时，右侧状态仍然只会向前推进。
+ */
+function advanceNodeProgress(
+  current: NodeProgressMap,
+  node: string | null,
+  nodeStatus: NodeProgressStatus,
+): NodeProgressMap {
+  if (!node) return current
+  const targetIndex = NODE_INDEX.get(node)
+  if (targetIndex === undefined) return current
+
+  const next = { ...current }
+  for (let index = 0; index < targetIndex; index += 1) {
+    const previousNode = JD_PROGRESS_NODES[index]
+    if (next[previousNode] !== 'failed') next[previousNode] = 'completed'
+  }
+
+  const existing = next[node]
+  if (existing === 'completed' && nodeStatus !== 'failed') return next
+  next[node] = nodeStatus
+  return next
 }
 
 const EVENT_NAMES: AgentEventName[] = [
@@ -95,14 +125,11 @@ function reducer(
   }
 
   if (action.type === 'checkpoint') {
-    const nodeProgress = { ...state.nodeProgress }
-    if (action.currentNode && nodeProgress[action.currentNode] !== undefined) {
-      nodeProgress[action.currentNode] = action.status === 'interrupted'
-        ? 'interrupted'
-        : action.status === 'failed'
-          ? 'failed'
-          : 'running'
-    }
+    const nodeProgress = advanceNodeProgress(
+      state.nodeProgress,
+      action.currentNode,
+      action.status === 'interrupted' ? 'interrupted' : action.status === 'failed' ? 'failed' : 'running',
+    )
     if (action.status === 'completed') Object.keys(nodeProgress).forEach((node) => { nodeProgress[node] = 'completed' })
     return { ...state, status: action.status, currentNode: action.currentNode, nodeProgress }
   }
@@ -121,10 +148,18 @@ function reducer(
     completedNodes.push(eventNode)
   }
   if (eventNode && nodeProgress[eventNode] !== undefined) {
-    if (event.event === 'node_started' || event.event === 'node_retrying' || event.event === 'run_resumed') nodeProgress[eventNode] = 'running'
-    if (event.event === 'node_finished') nodeProgress[eventNode] = 'completed'
-    if (event.event === 'interrupt_required') nodeProgress[eventNode] = 'interrupted'
-    if (event.event === 'run_failed') nodeProgress[eventNode] = 'failed'
+    if (event.event === 'node_started' || event.event === 'node_retrying' || event.event === 'run_resumed') {
+      Object.assign(nodeProgress, advanceNodeProgress(nodeProgress, eventNode, 'running'))
+    }
+    if (event.event === 'node_finished') {
+      Object.assign(nodeProgress, advanceNodeProgress(nodeProgress, eventNode, 'completed'))
+    }
+    if (event.event === 'interrupt_required') {
+      Object.assign(nodeProgress, advanceNodeProgress(nodeProgress, eventNode, 'interrupted'))
+    }
+    if (event.event === 'run_failed') {
+      Object.assign(nodeProgress, advanceNodeProgress(nodeProgress, eventNode, 'failed'))
+    }
   }
 
   let status = state.status

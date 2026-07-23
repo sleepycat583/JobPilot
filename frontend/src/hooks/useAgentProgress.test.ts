@@ -250,6 +250,56 @@ describe('useAgentProgress', () => {
     expect(Object.values(result.current.nodeProgress).every((status) => status === 'completed')).toBe(true)
   })
 
+  it('projects a later node event onto the fixed flow and keeps later nodes pending', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => {
+      instances[0]!.emit('node_started', makeEvent({ event: 'node_started', node: 'prepare_final_review' }))
+    })
+
+    expect(result.current.nodeProgress).toMatchObject({
+      rolling_summary: 'completed',
+      supervisor: 'completed',
+      queue_dispatch: 'completed',
+      jd_parser: 'completed',
+      prepare_final_review: 'running',
+      final_review_gate: 'pending',
+      finalize_node: 'pending',
+      api: 'pending',
+    })
+  })
+
+  it('does not roll a completed node back when a stale checkpoint arrives', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => {
+      instances[0]!.emit('node_finished', makeEvent({ event: 'node_finished', node: 'jd_parser' }))
+    })
+    act(() => {
+      result.current.syncCheckpointState('running', 'supervisor')
+    })
+
+    expect(result.current.nodeProgress.rolling_summary).toBe('completed')
+    expect(result.current.nodeProgress.supervisor).toBe('completed')
+    expect(result.current.nodeProgress.jd_parser).toBe('completed')
+  })
+
+  it('keeps the review gate and all following steps white while interrupted', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => {
+      instances[0]!.emit('interrupt_required', makeEvent({ event: 'interrupt_required', node: 'final_review_gate' }))
+    })
+
+    expect(result.current.nodeProgress.prepare_final_review).toBe('completed')
+    expect(result.current.nodeProgress.final_review_gate).toBe('interrupted')
+    expect(result.current.nodeProgress.finalize_node).toBe('pending')
+    expect(result.current.nodeProgress.api).toBe('pending')
+  })
+
   it('does not dispatch error on transient SSE error (readyState !== CLOSED)', () => {
     setupMockEventSource()
     const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))

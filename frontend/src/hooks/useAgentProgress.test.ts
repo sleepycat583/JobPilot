@@ -2,7 +2,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { useAgentProgress } from './useAgentProgress'
+import { JD_PROGRESS_NODES, useAgentProgress } from './useAgentProgress'
 import type { AgentEvent, AgentEventName } from '../types'
 
 /** 构造一个最小合法的 SSE 事件 payload */
@@ -236,6 +236,20 @@ describe('useAgentProgress', () => {
     expect(instances[0]!.readyState).toBe(MockEventSource.CLOSED)
   })
 
+  it('keeps the complete JD flow visible and closes every step on run_completed', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    expect(Object.keys(result.current.nodeProgress)).toEqual([...JD_PROGRESS_NODES])
+    expect(Object.values(result.current.nodeProgress).every((status) => status === 'pending')).toBe(true)
+
+    act(() => {
+      instances[0]!.emit('run_completed', makeEvent({ event: 'run_completed', node: 'api' }))
+    })
+
+    expect(Object.values(result.current.nodeProgress).every((status) => status === 'completed')).toBe(true)
+  })
+
   it('does not dispatch error on transient SSE error (readyState !== CLOSED)', () => {
     setupMockEventSource()
     const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
@@ -331,5 +345,43 @@ describe('useAgentProgress', () => {
     expect(instances).toHaveLength(2)
     expect(result.current.threadId).toBe('thread-2')
     expect(result.current.completedNodes).toEqual([])
+  })
+
+  it('does not expose the previous completed state during a thread switch', () => {
+    setupMockEventSource()
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) => useAgentProgress('session-1', threadId),
+      { initialProps: { threadId: 'thread-1' } },
+    )
+
+    act(() => instances[0]!.emit('run_completed', makeEvent({ event: 'run_completed', node: 'api' })))
+    expect(result.current.status).toBe('completed')
+
+    rerender({ threadId: 'thread-2' })
+
+    expect(result.current.threadId).toBe('thread-2')
+    expect(result.current.status).toBe('running')
+    expect(Object.values(result.current.nodeProgress).every((status) => status === 'pending')).toBe(true)
+  })
+
+  it('marks JD parser complete from run_completed even without a node_finished event', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => instances[0]!.emit('run_completed', makeEvent({ event: 'run_completed', node: 'api' })))
+
+    expect(result.current.status).toBe('completed')
+    expect(result.current.nodeProgress.jd_parser).toBe('completed')
+  })
+
+  it('keeps the failure reason and marks the terminal task step failed', () => {
+    setupMockEventSource()
+    const { result } = renderHook(() => useAgentProgress('session-1', 'thread-1'))
+
+    act(() => instances[0]!.emit('run_failed', makeEvent({ event: 'run_failed', node: 'api', detail: 'UNHANDLED_NODE_EXCEPTION' })))
+
+    expect(result.current.status).toBe('failed')
+    expect(result.current.nodeProgress.api).toBe('failed')
+    expect(result.current.errorMessage).toBe('UNHANDLED_NODE_EXCEPTION')
   })
 })

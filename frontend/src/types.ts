@@ -58,6 +58,7 @@ export type AgentProgressState = {
   lastEventId: string | null
   activeEventSourceSession: string | null
   errorMessage: string | null
+  nodeProgress: Record<string, 'pending' | 'running' | 'completed' | 'interrupted' | 'failed'>
 }
 
 /** 后端 JDParsed 的前端只读映射；字段名与冻结的 Pydantic Schema 保持一致。 */
@@ -132,7 +133,7 @@ export type ThreadReviewCommand =
 export type ThreadStateResponse = {
   thread_id: string
   session_id: string
-  status: 'running' | 'interrupted' | 'completed'
+  status: 'running' | 'interrupted' | 'completed' | 'failed'
   review_status: string | null
   review_target: string | null
   current_node: string | null

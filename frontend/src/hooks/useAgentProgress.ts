@@ -1,12 +1,33 @@
-import { useEffect, useMemo, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 
 import type { AgentEvent, AgentEventName, AgentProgressState } from '../types'
 
 type ProgressAction =
   | { type: 'connect'; sessionId: string; threadId: string }
   | { type: 'event'; payload: AgentEvent }
+  | { type: 'checkpoint'; status: AgentProgressState['status']; currentNode: string | null }
   | { type: 'error'; message: string }
   | { type: 'reset' }
+
+export type NodeProgressStatus = 'pending' | 'running' | 'completed' | 'interrupted' | 'failed'
+
+/** JD 异步分析的稳定控制流顺序；UI 不再依赖事件到达数量决定列表长度。 */
+export const JD_PROGRESS_NODES = [
+  'rolling_summary',
+  'supervisor',
+  'queue_dispatch',
+  'jd_parser',
+  'prepare_final_review',
+  'final_review_gate',
+  'finalize_node',
+  'api',
+] as const
+
+type NodeProgressMap = Record<string, NodeProgressStatus>
+
+function emptyNodeProgress(): NodeProgressMap {
+  return Object.fromEntries(JD_PROGRESS_NODES.map((node) => [node, 'pending']))
+}
 
 const EVENT_NAMES: AgentEventName[] = [
   'node_started',
@@ -28,6 +49,7 @@ const initialState: AgentProgressState = {
   lastEventId: null,
   activeEventSourceSession: null,
   errorMessage: null,
+  nodeProgress: emptyNodeProgress(),
 }
 
 /**
@@ -59,6 +81,7 @@ function reducer(
       events: [],
       lastEventId: null,
       errorMessage: null,
+      nodeProgress: emptyNodeProgress(),
     }
   }
 
@@ -71,6 +94,19 @@ function reducer(
     }
   }
 
+  if (action.type === 'checkpoint') {
+    const nodeProgress = { ...state.nodeProgress }
+    if (action.currentNode && nodeProgress[action.currentNode] !== undefined) {
+      nodeProgress[action.currentNode] = action.status === 'interrupted'
+        ? 'interrupted'
+        : action.status === 'failed'
+          ? 'failed'
+          : 'running'
+    }
+    if (action.status === 'completed') Object.keys(nodeProgress).forEach((node) => { nodeProgress[node] = 'completed' })
+    return { ...state, status: action.status, currentNode: action.currentNode, nodeProgress }
+  }
+
   const event = action.payload
   // SSE 是 session 级通道。当前页面只展示本次提交的 thread，回放或并行任务事件
   // 不能改变该任务的进度状态。
@@ -79,9 +115,16 @@ function reducer(
   }
   const completedNodes = [...state.completedNodes]
   const eventNode = event.node ?? null
+  const nodeProgress = { ...state.nodeProgress }
 
   if (event.event === 'node_finished' && eventNode && !completedNodes.includes(eventNode)) {
     completedNodes.push(eventNode)
+  }
+  if (eventNode && nodeProgress[eventNode] !== undefined) {
+    if (event.event === 'node_started' || event.event === 'node_retrying' || event.event === 'run_resumed') nodeProgress[eventNode] = 'running'
+    if (event.event === 'node_finished') nodeProgress[eventNode] = 'completed'
+    if (event.event === 'interrupt_required') nodeProgress[eventNode] = 'interrupted'
+    if (event.event === 'run_failed') nodeProgress[eventNode] = 'failed'
   }
 
   let status = state.status
@@ -111,10 +154,13 @@ function reducer(
     case 'run_completed':
       status = 'completed'
       currentNode = null
+      // 业务规则：后端发布 run_completed 代表本次任务已收敛，固定流程投影中的步骤全部完成。
+      Object.keys(nodeProgress).forEach((node) => { nodeProgress[node] = 'completed' })
       break
     case 'run_failed':
       status = 'failed'
       currentNode = null
+      if (eventNode && nodeProgress[eventNode] !== undefined) nodeProgress[eventNode] = 'failed'
       break
   }
 
@@ -127,7 +173,8 @@ function reducer(
     completedNodes,
     lastEventId: event.event_id,
     events: [...state.events, event],
-    errorMessage: null,
+    errorMessage: event.event === 'run_failed' ? event.detail ?? '任务执行失败，请检查模型服务连接后重试。' : null,
+    nodeProgress,
     activeEventSourceSession:
       event.event === 'run_completed' || event.event === 'run_failed'
         ? null
@@ -203,11 +250,28 @@ export function useAgentProgress(sessionId: string | null, threadId: string | nu
     }
   }, [sessionId, threadId])
 
+  const syncCheckpointState = useCallback((status: AgentProgressState['status'], currentNode: string | null) => {
+    dispatch({ type: 'checkpoint', status, currentNode })
+  }, [])
+
+  // 参数切换到新线程后，effect 尚未执行前仍可能保留上一线程的 reducer 快照。
+  // 这里先暴露新线程的临时运行状态，避免旧任务的 completed 污染新任务 UI。
+  const visibleState = state.threadId === threadId && state.sessionId === sessionId
+    ? state
+    : {
+        ...initialState,
+        sessionId,
+        threadId,
+        status: sessionId && threadId ? 'running' as const : 'idle' as const,
+        activeEventSourceSession: sessionId,
+      }
+
   return useMemo(
     () => ({
-      ...state,
+      ...visibleState,
+      syncCheckpointState,
       isConnected: Boolean(sessionId && threadId && state.activeEventSourceSession === sessionId),
     }),
-    [sessionId, state, threadId],
+    [sessionId, state, syncCheckpointState, threadId, visibleState],
   )
 }

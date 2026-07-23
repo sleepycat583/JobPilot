@@ -1,7 +1,7 @@
 /** 求职分析工作台入口，通过 /api/tasks + SSE + /v1/threads 对接后端。 */
 import { useEffect, useState } from 'react'
 
-import { useAgentProgress } from './hooks/useAgentProgress'
+import { JD_PROGRESS_NODES, useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
 import { ThreadReviewPanel } from './components/ThreadReviewPanel'
 import { JDResultPanel } from './components/JDResultPanel'
@@ -44,6 +44,7 @@ function App() {
 
   // 线程审核状态 — 从 SSE 同步 threadId 或持久化 thread 加载
   const review = useThreadReview(threadId ?? progress.threadId, sessionId ?? progress.sessionId)
+  const currentReviewState = review.state?.thread_id === threadId ? review.state : null
 
   /**
    * 综合 SSE 和 REST API 两条通路推导统一状态。
@@ -55,22 +56,26 @@ function App() {
    */
   const effectiveStatus = (() => {
     if (progress.status === 'idle') return 'idle'
-    if (review.state?.status === 'completed' || progress.status === 'completed') return 'completed'
-    if (review.state?.interrupt || progress.status === 'interrupted') return 'interrupted'
-    if (progress.status === 'failed' || (progress.status === 'running' && Boolean(progress.errorMessage))) return 'failed'
+    if (currentReviewState?.status === 'failed' || progress.status === 'failed') return 'failed'
+    if (currentReviewState?.status === 'completed' || progress.status === 'completed') return 'completed'
+    if (currentReviewState?.interrupt || progress.status === 'interrupted') return 'interrupted'
+    if (progress.status === 'running' && Boolean(progress.errorMessage)) return 'failed'
     return progress.status
   })()
 
   useEffect(() => {
-    if (progress.status !== 'interrupted' || !progress.threadId) return
+    if (progress.status !== 'interrupted' || !progress.threadId || review.state?.interrupt) return
     // interrupt_required 可能晚于首次 state 查询落盘；收到事件后再次读取，确保表单以 Checkpoint 为准。
     void review.loadState(progress.threadId).catch((cause: unknown) => {
       setError(cause instanceof Error ? cause.message : '无法读取审核状态。')
     })
-  }, [progress.status, progress.threadId, review.loadState])
+  }, [progress.status, progress.threadId, review.loadState, currentReviewState?.interrupt])
 
   useEffect(() => {
-    if (!threadId || review.state?.jd_parsed || !progress.completedNodes.includes('jd_parser')) return
+    const jdParserFinished = progress.nodeProgress.jd_parser === 'completed'
+    const taskReachedTerminalState = progress.status === 'completed'
+    const hasResultOrInterrupt = Boolean(currentReviewState?.jd_parsed || currentReviewState?.interrupt)
+    if (!threadId || hasResultOrInterrupt || (!jdParserFinished && !taskReachedTerminalState)) return
 
     let cancelled = false
     // 节点结束事件可能比 Checkpoint 可读早一个调度周期；有限重试只等待已完成的持久化写入。
@@ -78,7 +83,8 @@ function App() {
       for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
         try {
           const state = await review.loadState(threadId)
-          if (state.jd_parsed || state.status === 'completed' || state.interrupt) return
+          // completed 只代表 Graph 结束；结果字段可能随后才写入 Checkpoint，不能提前停止重试。
+          if (state.jd_parsed || state.interrupt) return
         } catch {
           // 线程刚创建时 Checkpoint 尚不存在，等待下一次短重试。
         }
@@ -87,10 +93,10 @@ function App() {
     }
     void loadParsedResult()
     return () => { cancelled = true }
-  }, [progress.completedNodes, review.loadState, review.state?.jd_parsed, threadId])
+  }, [progress.nodeProgress.jd_parser, progress.status, review.loadState, currentReviewState?.jd_parsed, currentReviewState?.interrupt, threadId])
 
   useEffect(() => {
-    if (!threadId || progress.status !== 'running' || review.state?.interrupt) return
+    if (!threadId || progress.status !== 'running' || currentReviewState?.interrupt) return
 
     // 异步任务刚受理时，首次状态查询可能早于 Graph 写入 interrupt；SSE 若因
     // 开发代理重连等原因未送达 interrupt_required，轮询 Checkpoint 仍可恢复审核表单。
@@ -100,7 +106,16 @@ function App() {
       })
     }, 800)
     return () => window.clearInterval(timer)
-  }, [progress.status, review.loadState, review.state?.interrupt, threadId])
+  }, [progress.status, review.loadState, currentReviewState?.interrupt, threadId])
+
+  useEffect(() => {
+    if (!currentReviewState) return
+    // Checkpoint 是 SSE 丢失或恢复后端执行时的权威兜底，只同步整体状态和当前节点。
+    progress.syncCheckpointState(
+      currentReviewState.status === 'interrupted' ? 'interrupted' : currentReviewState.status,
+      currentReviewState.current_node,
+    )
+  }, [currentReviewState, progress.syncCheckpointState])
 
   /**
    * POST /api/tasks 启动异步分析，保存 202 返回的 session_id/thread_id。
@@ -172,18 +187,21 @@ function App() {
       </div>
       {effectiveStatus === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
       {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}
-      {review.state?.jd_parsed ? <JDResultPanel result={review.state.jd_parsed} /> : null}
-      {review.state?.interrupt ? (
+      {effectiveStatus === 'failed' && !error ? <div className="state-card error-state"><p>{progress.errorMessage ?? '任务执行失败，请检查模型服务连接后重试。'}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div> : null}
+      {currentReviewState?.jd_parsed ? <JDResultPanel result={currentReviewState.jd_parsed} /> : null}
+      {currentReviewState?.interrupt ? (
         <ThreadReviewPanel
-          interrupt={review.state.interrupt}
+          interrupt={currentReviewState.interrupt}
           isResuming={review.isResuming}
           error={review.error}
           onResume={(command: ThreadReviewCommand) => { void review.resume(command) }}
           onRetry={review.retry}
-          onRefresh={() => { void review.loadState(review.state!.thread_id) }}
+          onRefresh={() => { void review.loadState(currentReviewState.thread_id) }}
         />
-      ) : effectiveStatus === 'completed' ? (
+      ) : effectiveStatus === 'completed' && currentReviewState?.jd_parsed ? (
         <p className="completion-note">任务已完成。</p>
+      ) : effectiveStatus === 'completed' ? (
+        <div className="state-card loading-state"><span className="spinner" />任务已完成，正在同步解析结果...</div>
       ) : null}
       {threadId && <footer className="thread-footer">thread_id: {threadId}</footer>}
     </section>
@@ -194,10 +212,12 @@ function App() {
         <p className="empty-hint">提交 JD 后在此查看实时进度。</p>
       ) : (
         <ol className="progress-list">
-          {progress.completedNodes.map((node) => (
-            <li key={node} className="done"><span>✓</span>{progressLabel(node)}</li>
-          ))}
-          {progress.currentNode && <li className="current"><span />{progressLabel(progress.currentNode)}</li>}
+          {JD_PROGRESS_NODES.map((node) => {
+            const nodeStatus = progress.nodeProgress[node]
+            return <li key={node} className={nodeStatus === 'completed' ? 'done' : nodeStatus === 'failed' ? 'error' : nodeStatus === 'interrupted' || nodeStatus === 'running' ? 'current' : ''}>
+              <span>{nodeStatus === 'completed' ? '✓' : nodeStatus === 'failed' ? '✗' : ''}</span>{progressLabel(node)}
+            </li>
+          })}
           {progress.status === 'failed' && progress.errorMessage && (
             <li className="error"><span>✗</span>{progress.errorMessage}</li>
           )}

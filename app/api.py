@@ -443,6 +443,8 @@ def _state_response(
     if interrupt_payload is not None:
         payload["status"] = "interrupted"
         payload["interrupt"] = interrupt_payload
+    elif _terminal_error_code(state) is not None:
+        payload["status"] = "failed"
     else:
         payload["status"] = "completed"
     return JSONResponse(status_code=200, content=payload)
@@ -462,7 +464,7 @@ def _snapshot_state_payload(snapshot: Any, *, thread_id: str) -> dict[str, Any]:
     if not isinstance(values, dict):
         values = {}
     interrupt_payload = _extract_interrupt(snapshot)
-    status = "interrupted" if interrupt_payload is not None else "running" if getattr(snapshot, "next", ()) else "completed"
+    status = "interrupted" if interrupt_payload is not None else "running" if getattr(snapshot, "next", ()) else "failed" if _terminal_error_code(values) is not None else "completed"
     return {
         "thread_id": thread_id,
         "session_id": _session_id_from_snapshot(snapshot),
@@ -477,6 +479,24 @@ def _snapshot_state_payload(snapshot: Any, *, thread_id: str) -> dict[str, Any]:
         "match_result": _serialize(values.get("match_result")),
         "final_output": _serialize(values.get("final_output")),
     }
+
+
+def _terminal_error_code(state: dict[str, Any]) -> str | None:
+    """识别已进入 error_node 的终态失败，避免把异常结束错误标记为 completed。
+
+    仅以 `error_node` 作为失败判据：某些可恢复业务错误会先写入 error_log，
+    但后续仍可能回到正常执行路径，不能因此提前宣布整次任务失败。
+    """
+
+    if state.get("current_node") != "error_node":
+        return None
+    error_log = state.get("error_log")
+    if not isinstance(error_log, list) or not error_log:
+        return "GRAPH_EXECUTION_FAILED"
+    latest = error_log[-1]
+    if isinstance(latest, dict) and isinstance(latest.get("code"), str):
+        return latest["code"]
+    return "GRAPH_EXECUTION_FAILED"
 
 
 def _resolve_session_id(candidate: str | None) -> str | None:
@@ -728,6 +748,18 @@ async def _run_graph_in_background(
             session_id=session_id,
             thread_id=thread_id,
             detail="GRAPH_EXECUTION_FAILED",
+            level="error",
+        )
+        return
+    terminal_error_code = _terminal_error_code(state) if isinstance(state, dict) else None
+    if terminal_error_code is not None:
+        _publish_graph_run_event(
+            event_bus=event_bus,
+            logger=logger,
+            event_name="run_failed",
+            session_id=session_id,
+            thread_id=thread_id,
+            detail=terminal_error_code,
             level="error",
         )
         return

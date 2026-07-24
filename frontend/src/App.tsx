@@ -3,12 +3,12 @@ import { useEffect, useState } from 'react'
 
 import { JD_PROGRESS_NODES, useAgentProgress } from './hooks/useAgentProgress'
 import { useThreadReview } from './hooks/useThreadReview'
+import { useResumeLibrary } from './hooks/useResumeLibrary'
 import { ThreadReviewPanel } from './components/ThreadReviewPanel'
 import { JDResultPanel } from './components/JDResultPanel'
+import { MatchResultPanel } from './components/MatchResultPanel'
+import { ResumeLibrary } from './components/ResumeLibrary'
 import type { ApiErrorResponse, TaskAcceptedResponse, ThreadReviewCommand } from './types'
-
-// TODO(第 2 章): 对接简历库接口，替换空数组
-const EMPTY_RESUMES: { resume_version: string; file_name: string; index_status: string }[] = []
 
 /** X-Session-ID 持久化 key（第 0 章全局约束） */
 const SESSION_STORAGE_KEY = 'job-assistant.x-session-id'
@@ -32,12 +32,13 @@ function parseApiError(response: Response, body: unknown, fallback: string): Err
 
 function App() {
   const [jdText, setJdText] = useState('')
-  const [resumeVersion, setResumeVersion] = useState('')
   const [tab, setTab] = useState<'jd' | 'match'>('jd')
   const [error, setError] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(loadSessionId())
   const [threadId, setThreadId] = useState<string | null>(null)
-  const fileName = EMPTY_RESUMES.find((r) => r.resume_version === resumeVersion)?.file_name ?? '未选择'
+  const resumeLibrary = useResumeLibrary()
+  const selectedResume = resumeLibrary.resumes.find((resume) => resume.resume_id === resumeLibrary.selectedResumeId)
+  const fileName = selectedResume?.file_name ?? '未选择'
 
   // SSE 进度 — sessionId 存在时订阅事件流
   const progress = useAgentProgress(sessionId, threadId)
@@ -125,12 +126,19 @@ function App() {
    * - 后续请求复用持久化的 session_id
    * - 错误按 { error: { code, message } } 解析
    */
-  async function analyze() {
+  async function analyze(mode: 'jd' | 'match') {
     setError(null)
     try {
       const xSessionId = loadSessionId()
       const body: Record<string, unknown> = { jd_text: jdText }
-      if (resumeVersion) body.resume_version = resumeVersion
+      // 业务规则：JD 解析只依赖粘贴文本；只有用户主动点击匹配时才发送简历标识。
+      if (mode === 'match') {
+        if (!resumeLibrary.selectedResumeId) {
+          setError('请先选择一份已建立索引的简历，再开始匹配。')
+          return
+        }
+        body.resume_id = resumeLibrary.selectedResumeId
+      }
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (xSessionId) headers['X-Session-ID'] = xSessionId
 
@@ -142,53 +150,35 @@ function App() {
       saveSessionId(data.session_id)
       setSessionId(data.session_id)
       setThreadId(data.thread_id)
-      setTab('jd')
+      setTab(mode)
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : '分析失败，请重试。')
     }
   }
 
-  const hasResume = EMPTY_RESUMES.length > 0
-
   return <main className="workbench">
-    <aside className="resume-sidebar" aria-label="简历库">
-      <h1>简历库</h1>
-      {hasResume ? (
-        <div className="resume-list">
-          {EMPTY_RESUMES.map((resume) => (
-            <button key={resume.resume_version} type="button" className={`resume-item ${resumeVersion === resume.resume_version ? 'selected' : ''}`} onClick={() => setResumeVersion(resume.resume_version)}>
-              <strong>{resume.file_name}</strong>
-              <span className={`resume-status ${resume.index_status}`}><i />{resume.index_status === 'indexed' ? `已索引 · ${resume.resume_version}` : '索引失败'}</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="empty-hint">暂无简历，请上传并完成索引。</p>
-      )}
-      <button type="button" className="upload-button" disabled>
-        <span>＋</span>上传新版本简历
-      </button>
-      <div className="disabled-tools">
-        <div>模拟面试<span>功能开发中</span></div>
-        <div>历史记录<span>功能开发中</span></div>
-      </div>
-    </aside>
+    <ResumeLibrary {...resumeLibrary} onSelect={resumeLibrary.select} onClearSelection={resumeLibrary.clearSelection} onUpload={(file) => { void resumeLibrary.upload(file) }} onRetry={(resumeId) => { void resumeLibrary.retry(resumeId) }} onRefresh={() => { void resumeLibrary.refresh() }} />
 
     <section className="analysis-area">
       <label htmlFor="jd-input" className="input-label">粘贴职位描述（JD）</label>
       <textarea id="jd-input" className="jd-input" value={jdText} onChange={(e) => setJdText(e.target.value)} aria-label="职位描述" />
       <div className="analysis-action-row">
-        <p>将匹配: <b>{fileName}</b><span>（不选则仅做 JD 解析）</span></p>
-        <button type="button" className="primary-button" onClick={() => void analyze()} disabled={effectiveStatus === 'running'}>{effectiveStatus === 'running' ? '分析中...' : '开始分析'}</button>
+        <p>当前简历: <b>{fileName}</b><span>（JD 解析不会使用简历）</span></p>
+        <div className="analysis-actions">
+          <button type="button" className="secondary-button" onClick={() => void analyze('jd')} disabled={effectiveStatus === 'running'}>{effectiveStatus === 'running' ? '分析中...' : '解析 JD'}</button>
+          <button type="button" className="primary-button" onClick={() => void analyze('match')} disabled={effectiveStatus === 'running' || !currentReviewState?.jd_parsed || !resumeLibrary.selectedResumeId}>开始匹配</button>
+        </div>
       </div>
       <div className="tabs" role="tablist" aria-label="分析结果">
         <button type="button" role="tab" aria-selected={tab === 'jd'} className={tab === 'jd' ? 'active' : ''} onClick={() => setTab('jd')}>JD 解析</button>
         <button type="button" role="tab" aria-selected={tab === 'match'} className={tab === 'match' ? 'active' : ''} onClick={() => setTab('match')}>匹配结果</button>
       </div>
       {effectiveStatus === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
-      {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div>}
-      {effectiveStatus === 'failed' && !error ? <div className="state-card error-state"><p>{progress.errorMessage ?? '任务执行失败，请检查模型服务连接后重试。'}</p><button type="button" className="secondary-button" onClick={() => void analyze()}>重试</button></div> : null}
-      {currentReviewState?.jd_parsed ? <JDResultPanel result={currentReviewState.jd_parsed} /> : null}
+      {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze(tab)}>重试</button></div>}
+      {effectiveStatus === 'failed' && !error ? <div className="state-card error-state"><p>{progress.errorMessage ?? '任务执行失败，请检查模型服务连接后重试。'}</p><button type="button" className="secondary-button" onClick={() => void analyze(tab)}>重试</button></div> : null}
+      {tab === 'jd' && currentReviewState?.jd_parsed ? <JDResultPanel result={currentReviewState.jd_parsed} /> : null}
+      {tab === 'match' && currentReviewState?.match_result ? <MatchResultPanel result={currentReviewState.match_result} /> : null}
+      {tab === 'match' && !currentReviewState?.match_result && <div className="state-card empty-state"><p>选择已索引的简历后，先完成 JD 解析，再点击“开始匹配”。</p></div>}
       {currentReviewState?.interrupt ? (
         <ThreadReviewPanel
           interrupt={currentReviewState.interrupt}

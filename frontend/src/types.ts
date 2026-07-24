@@ -76,6 +76,41 @@ export type JDParsed = {
   source_language: string
 }
 
+/** 后端 MatchResult 的前端只读映射，包含可追溯到简历片段的证据。 */
+export type MatchEvidence = {
+  chunk_id: string
+  quote: string
+  relevance: number
+}
+
+export type MatchItem = {
+  requirement: string
+  status: 'matched' | 'transferable' | 'weak' | 'missing'
+  score: number
+  evidence: MatchEvidence[]
+  rationale: string
+}
+
+export type MatchResult = {
+  total_score: number
+  dimension_scores: Record<string, number>
+  matched_items: MatchItem[]
+  strengths: string[]
+  gaps: string[]
+  recommendations: string[]
+  low_score_review_required: boolean
+  resume_id: string
+}
+
+export type MatchUnavailableResult = {
+  status: 'MATCH_UNAVAILABLE'
+  resume_id: string
+  retrieval_evidence: { requirement: string; evidence: MatchEvidence[] }[]
+  message: string
+}
+
+export type MatchAnalysis = MatchResult | MatchUnavailableResult
+
 type InterruptBase = {
   target: string
   accepted_actions: string[]
@@ -115,7 +150,7 @@ export type FinalReviewCommand =
   | { action: 'reject'; feedback: string }
 export type LowScoreReviewCommand =
   | { action: 'continue'; feedback?: string }
-  | { action: 'revise_inputs'; feedback?: string; resume_version?: string; jd_text?: string }
+  | { action: 'revise_inputs'; feedback?: string; resume_id?: string; jd_text?: string }
   | { action: 'cancel'; feedback?: string }
 export type InterviewAnswerCommand =
   | { action: 'submit_answer'; answer: string; context?: string }
@@ -139,14 +174,14 @@ export type ThreadStateResponse = {
   current_node: string | null
   interrupt: ThreadInterrupt | null
   jd_parsed?: JDParsed | null
-  match_result?: Record<string, unknown> | null
+  match_result?: MatchAnalysis | null
   final_output?: Record<string, unknown> | null
 }
 
 /** POST /api/tasks 和 POST /v1/job-analysis 共用请求体 */
 export type JobAnalysisRequest = {
   jd_text: string
-  resume_version?: string
+  resume_id?: string
 }
 
 /** 后端统一错误响应格式（第 0 章全局约束） */
@@ -155,4 +190,24 @@ export type ApiErrorResponse = {
     code: string
     message: string
   }
+}
+
+/** 简历库接口的索引状态；状态完全由后端返回，前端不得自行推断。 */
+export type ResumeIndexStatus = 'pending' | 'indexing' | 'indexed' | 'failed'
+
+/** 已冻结的简历版本 DTO，对应 /v1/resumes 的列表项和单项响应。 */
+export type ResumeDto = {
+  resume_id: string
+  display_version: number
+  file_name: string
+  file_size: number
+  created_at: string
+  updated_at: string
+  index_status: ResumeIndexStatus
+  error_code: string | null
+  error_message: string | null
+}
+
+export type ResumeListResponse = {
+  resumes: ResumeDto[]
 }

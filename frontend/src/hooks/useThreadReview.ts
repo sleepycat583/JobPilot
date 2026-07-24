@@ -80,12 +80,13 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
     const active = threadId && sessionId ? { threadId, sessionId } : readStoredThread()
     if (!active) return
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(active))
-    // 通过异步回调读取远端状态，避免 effect 同步派生 React 状态。
+    // 新任务刚返回 202 时，Graph 可能尚未完成首个 Checkpoint 写入；稍作等待
+    // 可以避免一次必然的 404，也不影响后续由 SSE 与 800ms 轮询提供的恢复兜底。
     const timer = window.setTimeout(() => {
       void loadState(active.threadId).catch((reason: unknown) => {
         setError({ message: reason instanceof Error ? reason.message : '恢复状态失败。' })
       })
-    }, 0)
+    }, 250)
     return () => window.clearTimeout(timer)
   }, [loadState, sessionId, threadId])
 

@@ -138,7 +138,11 @@ def _extract_jd_with_retry(
         ``(parsed, retry_count, errors)``。两次都失败时 ``parsed`` 为 ``None``，
         调用方据此构造可审计的最小降级对象，而不让异常中断 LangGraph。
     """
-    structured_model = chat_model.with_structured_output(JDParsed)
+    structured_model = (
+        chat_model.with_structured_output(JDParsed)
+        if hasattr(chat_model, "with_structured_output")
+        else chat_model
+    )
     prompt = _build_jd_prompt(jd_input)
     errors: list[ErrorEntry] = []
 
@@ -147,7 +151,11 @@ def _extract_jd_with_retry(
             result = structured_model.invoke(prompt)
             if not isinstance(result, JDParsed):
                 # 正常 LangChain 实现会返回 JDParsed；此处也保护不规范 Provider/Mock。
-                result = JDParsed.model_validate(result)
+                result = (
+                    JDParsed.model_validate_json(result)
+                    if isinstance(result, str)
+                    else JDParsed.model_validate(result)
+                )
             return result, attempt, errors
         # Provider 超时、网络断连和 Tool Calling 参数校验都会以不同异常类型暴露；
         # 节点必须把它们收敛为可审计降级结果，不能中断整张 LangGraph。

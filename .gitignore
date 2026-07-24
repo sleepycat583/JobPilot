@@ -42,3 +42,7 @@ build/
 # 环境变量备份（防止 .env 副本被提交）
 .env.*
 !.env.example
+# Playwright MCP 工具的页面快照/控制台日志缓存目录
+.playwright-mcp/
+# 本地简历上传验证服务器落地的假数据
+data/resumes-verification/

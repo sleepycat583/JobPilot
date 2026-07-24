@@ -33,13 +33,13 @@ class ChromaQueryResult(TypedDict):
     relevance: float
 
 
-class ResumeVersionNotFoundError(ValueError):
-    """指定简历版本不存在时抛出的稳定错误。"""
+class ResumeNotFoundError(ValueError):
+    """指定简历资源不存在时抛出的稳定错误。"""
 
-    def __init__(self, resume_version: str) -> None:
-        self.code = "RESUME_VERSION_NOT_FOUND"
-        self.resume_version = resume_version
-        super().__init__(f"Resume version not found: {resume_version}")
+    def __init__(self, resume_id: str) -> None:
+        self.code = "RESUME_NOT_FOUND"
+        self.resume_id = resume_id
+        super().__init__(f"Resume not found: {resume_id}")
 
 
 class ChromaResumeStore:
@@ -94,25 +94,25 @@ class ChromaResumeStore:
             metadatas=[dict(chunk) for chunk in chunks],
         )
 
-    def query(self, query_text: str, resume_version: str) -> list[ChromaQueryResult]:
+    def query(self, query_text: str, resume_id: str) -> list[ChromaQueryResult]:
         """执行固定 top-k、版本隔离与阈值过滤的检索。
 
         参数：
             query_text: 查询文本。
-            resume_version: 目标简历版本，仅允许在该版本内检索。
+            resume_id: 目标简历资源，仅允许在该资源内检索。
 
         返回：
             relevance 不低于阈值的证据列表，保留 chunk_id、quote 和 relevance。
         """
 
         self._validate_collection_metadata()
-        self._ensure_resume_version_exists(resume_version)
+        self._ensure_resume_id_exists(resume_id)
         vectors = self._embedding_model.encode([query_text])
         result = self._collection.query(
             query_embeddings=vectors,
             n_results=RAG_TOP_K,
             include=["documents", "metadatas", "distances"],
-            where={"resume_version": resume_version},
+            where={"resume_id": resume_id},
         )
 
         rows: list[ChromaQueryResult] = []
@@ -134,17 +134,31 @@ class ChromaResumeStore:
 
         return rows
 
-    def _ensure_resume_version_exists(self, resume_version: str) -> None:
-        """确认目标版本已存在，避免查询时无过滤回退到其他版本。
+    def delete_resume_chunks(self, resume_id: str) -> None:
+        """删除指定简历资源的全部 chunk。
+
+        参数：
+            resume_id: 需要清理的简历资源 UUIDv4。
+
+        返回：
+            无返回值。删除不存在的资源按 Chroma 幂等语义处理。
+
+        重试索引必须先删除旧 chunk，防止文本变更后残留旧 chunk 被同一资源检索到。
+        """
+
+        self._collection.delete(where={"resume_id": resume_id})
+
+    def _ensure_resume_id_exists(self, resume_id: str) -> None:
+        """确认目标简历资源已存在，避免查询时无过滤回退到其他资源。
 
         这里先用 Chroma metadata 过滤做存在性检查；若不存在，立即抛出稳定错误码，
         由上层 Agent 转换成 LangGraph 的正常 state update。
         """
 
-        lookup = self._collection.get(where={"resume_version": resume_version}, limit=1)
+        lookup = self._collection.get(where={"resume_id": resume_id}, limit=1)
         ids = lookup.get("ids", [])
         if not ids:
-            raise ResumeVersionNotFoundError(resume_version)
+            raise ResumeNotFoundError(resume_id)
 
     @property
     def collection_metadata(self) -> dict[str, Any]:

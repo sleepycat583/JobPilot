@@ -14,7 +14,7 @@ FIXTURE_PATH = Path("tests/fixtures/resumes/semantic_resume.txt")
 def test_chunk_resume_splits_all_five_semantic_sections() -> None:
     """验证五类 section 的切分边界与 metadata 完整性。"""
 
-    chunks = chunk_resume(FIXTURE_PATH.read_text(encoding="utf-8"), resume_version="2026-07-v1")
+    chunks = chunk_resume(FIXTURE_PATH.read_text(encoding="utf-8"), resume_id="2026-07-v1")
 
     assert [chunk["chunk_type"] for chunk in chunks] == [
         "profile",
@@ -25,15 +25,15 @@ def test_chunk_resume_splits_all_five_semantic_sections() -> None:
         "skill",
         "education",
     ]
-    assert chunks[0]["chunk_id"] == "profile-001"
-    assert chunks[1]["chunk_id"] == "experience-001"
-    assert chunks[3]["chunk_id"] == "project-001"
-    assert chunks[5]["chunk_id"] == "skill-001"
-    assert chunks[6]["chunk_id"] == "education-001"
+    assert chunks[0]["chunk_id"] == "2026-07-v1:profile-001"
+    assert chunks[1]["chunk_id"] == "2026-07-v1:experience-001"
+    assert chunks[3]["chunk_id"] == "2026-07-v1:project-001"
+    assert chunks[5]["chunk_id"] == "2026-07-v1:skill-001"
+    assert chunks[6]["chunk_id"] == "2026-07-v1:education-001"
 
     for chunk in chunks:
         assert chunk["section_type"] == chunk["chunk_type"]
-        assert chunk["resume_version"] == "2026-07-v1"
+        assert chunk["resume_id"] == "2026-07-v1"
         assert chunk["source_id"] == "resume-main"
         assert chunk["source_text"]
         assert chunk["start_line"] <= chunk["end_line"]
@@ -57,7 +57,7 @@ def test_chunk_resume_supports_non_standard_entry_boundaries() -> None:
 负责 Agent 编排
 """
 
-    chunks = chunk_resume(text, resume_version="non-standard-v1", source_id="fixture.txt")
+    chunks = chunk_resume(text, resume_id="non-standard-v1", source_id="fixture.txt")
 
     assert [chunk["chunk_type"] for chunk in chunks] == ["experience", "experience", "project", "project"]
     assert "公司：甲公司" in chunks[0]["source_text"]

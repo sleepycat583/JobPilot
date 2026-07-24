@@ -86,8 +86,8 @@ class FixtureResumeStore:
 
     mapping: dict[tuple[str, str], list[dict[str, Any]]]
 
-    def query(self, query_text: str, resume_version: str) -> list[dict[str, Any]]:
-        return self.mapping.get((query_text, resume_version), [])
+    def query(self, query_text: str, resume_id: str) -> list[dict[str, Any]]:
+        return self.mapping.get((query_text, resume_id), [])
 
 
 @pytest.fixture
@@ -178,7 +178,7 @@ def graph_test_state_sample() -> JobAssistantState:
         "interview_next_action": None,
         "interview_follow_up_of": None,
         "interview_completion_reason": None,
-        "resume_version": None,
+        "resume_id": None,
         "review_status": "pending",
         "review_target": None,
         "review_feedback": None,

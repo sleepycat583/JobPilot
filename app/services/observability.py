@@ -151,9 +151,9 @@ def build_safe_input_summary(state: Mapping[str, Any], node: str) -> str:
     user_input = state.get("user_input")
     if isinstance(user_input, str):
         parts.append(f"user_input_length={len(user_input)}")
-    resume_version = state.get("resume_version")
-    if isinstance(resume_version, str):
-        parts.append(f"resume_version={redact_text(resume_version)}")
+    resume_id = state.get("resume_id")
+    if isinstance(resume_id, str):
+        parts.append(f"resume_id={redact_text(resume_id)}")
     parts.extend((f"has_jd={state.get('jd_parsed') is not None}", f"has_match={state.get('match_result') is not None}"))
     return "; ".join(parts)
 

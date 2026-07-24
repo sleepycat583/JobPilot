@@ -107,7 +107,7 @@ if phase == "interrupt":
     result = compiled.invoke({
         "thread_id": thread_id,
         "jd_parsed": {"job_title": "Java", "seniority": "mid", "company_name": None, "responsibilities": ["API"], "skills": [], "experience_requirements": [], "education_requirements": [], "interview_focus": [], "company_context": [], "ambiguities": [], "source_language": "zh-CN"},
-        "match_result": MatchResult(total_score=59.9, dimension_scores={"must": 20.0}, matched_items=[], strengths=["Java"], gaps=["Kubernetes"], recommendations=["补齐"], low_score_review_required=True, resume_version="resume-v1"),
+        "match_result": MatchResult(total_score=59.9, dimension_scores={"must": 20.0}, matched_items=[], strengths=["Java"], gaps=["Kubernetes"], recommendations=["补齐"], low_score_review_required=True, resume_id="resume-v1"),
         "review_target": "match_result",
         "error_log": [{"code": "RAG_EMPTY_RESULT", "node": "resume_matcher", "message": "none", "retryable": False, "attempt": 0, "timestamp": "2026-07-13T00:00:00+00:00", "raw_output_excerpt": None}],
         "execution_history": [{"node": "resume_matcher", "event": "success", "timestamp": "2026-07-13T00:00:00+00:00", "detail": "matched"}],
@@ -167,14 +167,14 @@ model, store = Model(revise_mode=phase == "resume_revise"), Store()
 graph = build_graph(model, resume_store=store, checkpointer=checkpointer)
 config = {"configurable": {"thread_id": thread_id}}
 if phase == "interrupt":
-    graph.invoke({"thread_id": thread_id, "user_input": JD_TEXT, "resume_version": "resume-v1"}, config=config)
+    graph.invoke({"thread_id": thread_id, "user_input": JD_TEXT, "resume_id": "resume-v1"}, config=config)
     # 该夹具的起点是低分 Gate；先在同一进程核可前置 JD，避免把旧测试误当作队列顺序验收。
     graph.invoke(Command(resume={"action": "approve"}), config=config)
     snapshot = graph.get_state(config)
     print(json.dumps({"state": snapshot.values, "interrupt": snapshot.tasks[0].interrupts[0].value, "model_calls": model.calls, "store_calls": store.calls}, default=lambda v: v.model_dump() if hasattr(v, "model_dump") else str(v)))
 else:
     if phase == "resume_revise":
-        command = {"action": "revise_inputs", "resume_version": "resume-v2", "feedback": "use latest resume"}
+        command = {"action": "revise_inputs", "resume_id": "resume-v2", "feedback": "use latest resume"}
     else:
         action = "approve" if phase == "resume_approve" else "continue" if phase == "resume_continue" else "cancel"
         command = {"action": action, "feedback": "confirmed"}
@@ -367,7 +367,7 @@ def test_low_score_revise_inputs_recovers_in_fresh_process_with_second_attempt(t
     state = revised["state"]
     assert state["match_result"]["total_score"] == 52.0
     assert revised["interrupt"]["type"] == "low_match_score"
-    assert state["match_result"]["resume_version"] == "resume-v2"
+    assert state["match_result"]["resume_id"] == "resume-v2"
     assert revised["model_calls"] == 1
     assert revised["store_calls"] == 3
     matcher_events = [event for event in state["execution_history"] if event["node"] == "resume_matcher" and event["event"] == "success"]

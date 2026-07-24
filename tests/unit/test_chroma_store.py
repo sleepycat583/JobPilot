@@ -40,7 +40,7 @@ class FakeCollection:
     def get(self, **kwargs: object) -> dict[str, list[str]]:
         self.get_calls.append(kwargs)
         where = kwargs.get("where", {})
-        if where == {"resume_version": "missing-v1"}:
+        if where == {"resume_id": "missing-v1"}:
             return {"ids": []}
         return {"ids": ["project-001"]}
 
@@ -127,13 +127,13 @@ def test_chroma_store_query_applies_top_k_and_relevance_threshold(monkeypatch: p
     results = store.query("java spring boot", "2026-07-v1")
 
     assert embedding_model.calls == [["java spring boot"]]
-    assert collection.get_calls == [{"where": {"resume_version": "2026-07-v1"}, "limit": 1}]
+    assert collection.get_calls == [{"where": {"resume_id": "2026-07-v1"}, "limit": 1}]
     assert collection.query_calls == [
         {
             "query_embeddings": [[0.1, 0.2, 0.3]],
             "n_results": RAG_TOP_K,
             "include": ["documents", "metadatas", "distances"],
-            "where": {"resume_version": "2026-07-v1"},
+            "where": {"resume_id": "2026-07-v1"},
         }
     ]
     assert results == [
@@ -143,10 +143,10 @@ def test_chroma_store_query_applies_top_k_and_relevance_threshold(monkeypatch: p
 
 
 @pytest.mark.core_agent_tests
-def test_chroma_store_missing_resume_version_fails_without_embedding_or_query(
+def test_chroma_store_missing_resume_id_fails_without_embedding_or_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证不存在的 resume_version 直接报稳定错误，不继续做向量检索。"""
+    """验证不存在的 resume_id 直接报稳定错误，不继续做向量检索。"""
 
     recorder: dict[str, object] = {}
     collection = FakeCollection()
@@ -159,13 +159,13 @@ def test_chroma_store_missing_resume_version_fails_without_embedding_or_query(
 
     store = chroma_store.ChromaResumeStore(build_settings(), embedding_model)
 
-    with pytest.raises(chroma_store.ResumeVersionNotFoundError) as exc_info:
+    with pytest.raises(chroma_store.ResumeNotFoundError) as exc_info:
         store.query("java spring boot", "missing-v1")
 
-    assert exc_info.value.code == "RESUME_VERSION_NOT_FOUND"
+    assert exc_info.value.code == "RESUME_NOT_FOUND"
     assert embedding_model.calls == []
     assert collection.query_calls == []
-    assert collection.get_calls == [{"where": {"resume_version": "missing-v1"}, "limit": 1}]
+    assert collection.get_calls == [{"where": {"resume_id": "missing-v1"}, "limit": 1}]
 
 
 @pytest.mark.core_agent_tests

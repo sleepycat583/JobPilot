@@ -69,8 +69,8 @@ class FakeChatModel:
 class FakeResumeStore:
     mapping: dict[tuple[str, str], list[dict[str, Any]]]
 
-    def query(self, query_text: str, resume_version: str) -> list[dict[str, Any]]:
-        return self.mapping.get((query_text, resume_version), [])
+    def query(self, query_text: str, resume_id: str) -> list[dict[str, Any]]:
+        return self.mapping.get((query_text, resume_id), [])
 
 
 def _stream_node_names(compiled_graph: Any, initial_state: dict[str, object]) -> list[str]:
@@ -163,7 +163,7 @@ def test_error_guard_routes_only_matching_latest_unhandled_error_to_error_node()
 def test_match_unavailable_routes_to_final_review_and_finalizes_serializable_draft() -> None:
     unavailable = MatchUnavailableResult(
         status="MATCH_UNAVAILABLE",
-        resume_version="v1",
+        resume_id="v1",
         retrieval_evidence=[],
         message="请人工检查检索证据",
     )
@@ -346,7 +346,7 @@ def test_low_score_gate_sets_review_status_and_stops_before_finalize() -> None:
     result = graph.invoke(
         {
             "user_input": "测试低分 Gate",
-            "resume_version": "2026-07-v1",
+            "resume_id": "2026-07-v1",
             "jd_parsed": _build_resume_match_jd(),
         },
         config=config,
@@ -380,7 +380,7 @@ def test_high_score_match_requires_final_approval_before_output() -> None:
     result = graph.invoke(
         {
             "user_input": "测试高分 Gate",
-            "resume_version": "2026-07-v1",
+            "resume_id": "2026-07-v1",
             "jd_parsed": _build_resume_match_jd(),
         }
     )
@@ -421,13 +421,13 @@ def test_revise_inputs_checkpoint_history_preserves_full_review_lifecycle() -> N
     graph.invoke(
         {
             "user_input": "测试低分重算审核轨迹",
-            "resume_version": "2026-07-v1",
+            "resume_id": "2026-07-v1",
             "jd_parsed": _build_resume_match_jd(),
         },
         config=config,
     )
     graph.invoke(
-        Command(resume={"action": "revise_inputs", "resume_version": "2026-07-v2", "feedback": "使用最新简历"}),
+        Command(resume={"action": "revise_inputs", "resume_id": "2026-07-v2", "feedback": "使用最新简历"}),
         config=config,
     )
 

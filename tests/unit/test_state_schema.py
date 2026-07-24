@@ -64,7 +64,7 @@ def test_execution_event_metadata_is_optional_and_structured() -> None:
         "event": "success",
         "timestamp": "t1",
         "detail": "match_completed",
-        "metadata": {"business_attempt": 2, "resume_version": "v2", "total_score": 72.0},
+        "metadata": {"business_attempt": 2, "resume_id": "v2", "total_score": 72.0},
     }
 
     assert event["metadata"]["business_attempt"] == 2
@@ -86,7 +86,7 @@ def test_state_can_hold_independent_business_fields() -> None:
 @pytest.mark.core_agent_tests
 def test_state_match_result_annotation_accepts_unavailable_result() -> None:
     result = MatchUnavailableResult(
-        status="MATCH_UNAVAILABLE", resume_version="v1", retrieval_evidence=[], message="请人工核可"
+        status="MATCH_UNAVAILABLE", resume_id="v1", retrieval_evidence=[], message="请人工核可"
     )
     state: JobAssistantState = {"match_result": result}
 

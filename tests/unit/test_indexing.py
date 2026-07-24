@@ -19,7 +19,7 @@ def test_index_resume_chunks_calls_embedding_and_store() -> None:
 专业技能
 Python、FastAPI
 """,
-        resume_version="2026-07-v1",
+        resume_id="2026-07-v1",
     )
     embedding_model = Mock()
     embedding_model.encode.return_value = [[0.1, 0.2], [0.3, 0.4]]
@@ -45,7 +45,7 @@ def test_index_resume_fixture_directory_batches_txt_fixtures(tmp_path: Path) -> 
 
     all_chunks = index_resume_fixture_directory(tmp_path, embedding_model, store)
 
-    assert [chunk["resume_version"] for chunk in all_chunks] == ["resume_a", "resume_b"]
+    assert [chunk["resume_id"] for chunk in all_chunks] == ["resume_a", "resume_b"]
     assert [chunk["source_id"] for chunk in all_chunks] == ["resume_a.txt", "resume_b.txt"]
     assert embedding_model.encode.call_count == 2
     assert store.upsert_chunks.call_count == 2

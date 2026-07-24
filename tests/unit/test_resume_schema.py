@@ -25,7 +25,7 @@ def test_match_result_rejects_total_score_out_of_range() -> None:
                     "gaps": [],
                     "recommendations": [],
                     "low_score_review_required": False,
-                    "resume_version": "v1",
+                    "resume_id": "v1",
                 }
             )
 
@@ -50,7 +50,7 @@ def test_match_unavailable_result_keeps_evidence_without_score_fields() -> None:
     result = MatchUnavailableResult.model_validate(
         {
             "status": "MATCH_UNAVAILABLE",
-            "resume_version": "v1",
+            "resume_id": "v1",
             "retrieval_evidence": [{"requirement": "Python", "evidence": [{"chunk_id": "c1", "quote": "Python 项目", "relevance": 0.9}]}],
             "message": "请人工核可",
         }

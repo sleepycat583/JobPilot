@@ -42,7 +42,7 @@ class MatchResult(BaseModel):
     gaps: list[str]
     recommendations: list[str]
     low_score_review_required: bool
-    resume_version: str
+    resume_id: str
 
 
 class UnavailableEvidenceItem(BaseModel):
@@ -64,6 +64,6 @@ class MatchUnavailableResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["MATCH_UNAVAILABLE"]
-    resume_version: str
+    resume_id: str
     retrieval_evidence: list[UnavailableEvidenceItem]
     message: str

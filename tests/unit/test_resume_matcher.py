@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agents.resume_matcher import MATCH_UNAVAILABLE_CODE, RAG_EMPTY_RESULT_CODE, RAG_EMPTY_RESULT_GAP, resume_matcher_node
-from app.rag.chroma_store import ResumeVersionNotFoundError
+from app.rag.chroma_store import ResumeNotFoundError
 from app.schemas.jd import JDParsed, SkillRequirement
 from app.schemas.resume import MatchUnavailableResult
 
@@ -33,11 +33,11 @@ class FakeResumeStore:
         self.missing_versions = missing_versions or set()
         self.calls: list[tuple[str, str]] = []
 
-    def query(self, query_text: str, resume_version: str) -> list[dict[str, Any]]:
-        self.calls.append((query_text, resume_version))
-        if resume_version in self.missing_versions:
-            raise ResumeVersionNotFoundError(resume_version)
-        return self.mapping.get((query_text, resume_version), [])
+    def query(self, query_text: str, resume_id: str) -> list[dict[str, Any]]:
+        self.calls.append((query_text, resume_id))
+        if resume_id in self.missing_versions:
+            raise ResumeNotFoundError(resume_id)
+        return self.mapping.get((query_text, resume_id), [])
 
 
 def build_jd() -> JDParsed:
@@ -85,7 +85,7 @@ def test_resume_matcher_binds_java_and_spring_boot_to_real_chunk_quote() -> None
     )
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1", "match_result": None},
+        {"jd_parsed": build_jd(), "resume_id": "2026-07-v1", "match_result": None},
         model,
         store,
     )
@@ -120,7 +120,7 @@ def test_resume_matcher_does_not_treat_docker_as_kubernetes_evidence() -> None:
     )
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1"},
+        {"jd_parsed": build_jd(), "resume_id": "2026-07-v1"},
         model,
         store,
     )
@@ -139,31 +139,31 @@ def test_resume_matcher_caps_empty_rag_result_and_logs_code() -> None:
     )
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1"},
+        {"jd_parsed": build_jd(), "resume_id": "2026-07-v1"},
         model,
         store,
     )
 
     assert result["match_result"].total_score <= 10.0
-    assert result["match_result"].resume_version == "2026-07-v1"
+    assert result["match_result"].resume_id == "2026-07-v1"
     assert any(entry["code"] == RAG_EMPTY_RESULT_CODE for entry in result["error_log"])
     assert RAG_EMPTY_RESULT_GAP in result["match_result"].gaps
     assert RAG_EMPTY_RESULT_CODE not in result["match_result"].gaps
 
 
-def test_resume_matcher_returns_resume_version_not_found_without_fallback() -> None:
+def test_resume_matcher_returns_resume_not_found_without_fallback() -> None:
     store = FakeResumeStore({}, missing_versions={"missing-v1"})
     model = FakeChatModel(["should-not-be-used"])
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "missing-v1"},
+        {"jd_parsed": build_jd(), "resume_id": "missing-v1"},
         model,
         store,
     )
 
     assert result["match_result"] is None
-    assert result["error_log"][0]["code"] == "RESUME_VERSION_NOT_FOUND"
-    assert result["execution_history"][0]["detail"] == "resume_version_not_found"
+    assert result["error_log"][0]["code"] == "RESUME_NOT_FOUND"
+    assert result["execution_history"][0]["detail"] == "resume_not_found"
     assert model.invoke_calls == 0
     assert all(version == "missing-v1" for _, version in store.calls)
 
@@ -185,7 +185,7 @@ def test_resume_matcher_returns_unscored_evidence_when_structured_output_retries
     )
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1"},
+        {"jd_parsed": build_jd(), "resume_id": "2026-07-v1"},
         model,
         store,
     )
@@ -218,7 +218,7 @@ def test_resume_matcher_writes_only_match_result_business_field() -> None:
     )
 
     result = resume_matcher_node(
-        {"jd_parsed": build_jd(), "resume_version": "2026-07-v1", "jd_parsed_extra": "ignored"},
+        {"jd_parsed": build_jd(), "resume_id": "2026-07-v1", "jd_parsed_extra": "ignored"},
         model,
         store,
     )

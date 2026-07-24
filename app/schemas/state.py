@@ -23,7 +23,7 @@ class ExecutionEventMetadata(TypedDict, total=False):
     """
 
     business_attempt: int
-    resume_version: str
+    resume_id: str
     total_score: float
     original_task_queue: list[str]
     normalized_task_queue: list[str]
@@ -69,7 +69,7 @@ class JobAssistantState(TypedDict, total=False):
     interview_next_action: str | None
     interview_follow_up_of: str | None
     interview_completion_reason: Literal["target_reached", "topics_completed", "user_ended", "max_questions_reached"] | None
-    resume_version: str | None
+    resume_id: str | None
 
     review_status: ReviewStatus
     review_target: Literal["jd_parsed", "match_result", "interview_report"] | None

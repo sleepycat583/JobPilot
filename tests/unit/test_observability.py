@@ -95,13 +95,13 @@ def test_redact_text_limits_long_user_content() -> None:
 
 def test_safe_input_summary_contains_only_metadata() -> None:
     summary = build_safe_input_summary(
-        {"user_input": "完整简历和JD内容不应出现", "resume_version": "resume-v1", "jd_parsed": None, "match_result": None},
+        {"user_input": "完整简历和JD内容不应出现", "resume_id": "resume-v1", "jd_parsed": None, "match_result": None},
         "resume_matcher",
     )
 
     assert "完整简历" not in summary
     assert "user_input_length=13" in summary
-    assert "resume_version=resume-v1" in summary
+    assert "resume_id=resume-v1" in summary
 
 
 def test_observer_double_writes_same_returned_error_entry_to_jsonl(tmp_path: Path) -> None:

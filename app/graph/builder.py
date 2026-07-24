@@ -256,7 +256,7 @@ def resume_matcher_placeholder(_: JobAssistantState) -> dict[str, object]:
             "gaps": [],
             "recommendations": [],
             "low_score_review_required": False,
-            "resume_version": "placeholder",
+            "resume_id": "placeholder",
         },
     }
 

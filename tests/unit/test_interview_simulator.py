@@ -64,7 +64,7 @@ def _match() -> MatchResult:
         gaps=["缺少 Redis 性能优化案例"],
         recommendations=[],
         low_score_review_required=False,
-        resume_version="v1",
+        resume_id="v1",
     )
 
 

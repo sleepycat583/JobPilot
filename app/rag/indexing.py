@@ -58,7 +58,7 @@ def index_resume_fixture_directory(
 
     for path in sorted(fixture_dir.glob("*.txt")):
         text = path.read_text(encoding="utf-8")
-        chunks = chunk_resume(text, resume_version=path.stem, source_id=path.name)
+        chunks = chunk_resume(text, resume_id=path.stem, source_id=path.name)
         index_resume_chunks(chunks, embedding_model, store)
         all_chunks.extend(chunks)
 

@@ -325,7 +325,7 @@ def _build_low_score_revision_update(state: JobAssistantState, decision: dict[st
     """
 
     jd_text = decision.get("jd_text")
-    resume_version = decision.get("resume_version")
+    resume_id = decision.get("resume_id")
     task_queue = ["jd_parse", "resume_match"] if isinstance(jd_text, str) and jd_text.strip() else ["resume_match"]
     update: dict[str, object] = {
         "current_node": "low_score_gate",
@@ -336,8 +336,8 @@ def _build_low_score_revision_update(state: JobAssistantState, decision: dict[st
     }
     if isinstance(jd_text, str) and jd_text.strip():
         update["user_input"] = jd_text
-    if isinstance(resume_version, str) and resume_version.strip():
-        update["resume_version"] = resume_version
+    if isinstance(resume_id, str) and resume_id.strip():
+        update["resume_id"] = resume_id
     return update
 
 

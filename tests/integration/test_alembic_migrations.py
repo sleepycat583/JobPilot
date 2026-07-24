@@ -49,7 +49,8 @@ def test_alembic_upgrade_creates_business_tables(project_root: Path, tmp_path: P
     assert "experiment_runs" in tables
     assert "review_audits" in tables
     assert "resume_idempotency_records" in tables
-    assert revision == "20260720_0003"
+    assert revision == "20260724_0004"
+    assert {"resume_versions", "resume_version_counters", "resume_upload_idempotency_records"} <= tables
     assert not checkpoint_path.exists()
 
 
@@ -77,7 +78,7 @@ def test_alembic_upgrade_is_repeatable_for_existing_business_database(project_ro
     finally:
         engine.dispose()
 
-    assert revision == "20260720_0003"
+    assert revision == "20260724_0004"
 
 
 @pytest.mark.core_agent_tests
@@ -124,11 +125,11 @@ def test_alembic_failed_follow_up_upgrade_preserves_existing_business_rows(
 
     broken_migrations = tmp_path / "broken_migrations"
     shutil.copytree(project_root / "migrations", broken_migrations)
-    (broken_migrations / "versions" / "20260720_0004_failure_probe.py").write_text(
+    (broken_migrations / "versions" / "20260724_0005_failure_probe.py").write_text(
         """\"\"\"Temporary migration failure probe.\"\"\"
 
-revision = "20260720_0004"
-down_revision = "20260720_0003"
+revision = "20260724_0005_failure_probe"
+down_revision = "20260724_0004"
 branch_labels = None
 depends_on = None
 
@@ -161,7 +162,7 @@ def downgrade() -> None:
         engine.dispose()
 
     assert row == ("existing-case", 99, "v-existing")
-    assert revision == "20260720_0003"
+    assert revision == "20260724_0004"
     assert not checkpoint_path.exists()
 
 
@@ -193,7 +194,7 @@ def test_alembic_unique_constraint_preserves_clean_existing_rows(
     try:
         with engine.connect() as connection:
             assert connection.execute(text("SELECT COUNT(*) FROM experiment_runs")).scalar_one() == 1
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20260720_0003"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20260724_0004"
     finally:
         engine.dispose()
 

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Header, Request
+from fastapi import BackgroundTasks, FastAPI, File, Header, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.types import Command
 from sqlalchemy.orm import Session, sessionmaker
@@ -31,10 +31,17 @@ from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
 from app.rag.chroma_store import ChromaResumeStore
 from app.repositories.resume_idempotency import ResumeIdempotencyConflictError, ResumeIdempotencyRepository
+from app.repositories.resume_versions import (
+    ResumeIndexStateConflictError,
+    ResumeUploadIdempotencyConflictError,
+    ResumeVersionRepository,
+)
 from app.repositories.review_audit import ReviewAuditRepository
 from app.schemas.review import HITLCommand, ResumeRequest
 from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
 from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger, publish_run_completed_event
+from app.services.resume_indexing import ResumeIndexService
+from app.services.resume_storage import ResumeFileValidationError, ResumeStorage
 from pydantic import TypeAdapter, ValidationError
 
 
@@ -43,13 +50,13 @@ class JobAnalysisRequest(BaseModel):
 
     参数：
         jd_text: 待解析的 JD 原文，最小长度沿用 JD Schema 的 20 字符约束。
-        resume_version: 提供时在 JD 解析成功后执行简历匹配。
+        resume_id: 提供时在 JD 解析成功后执行简历匹配。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     jd_text: str
-    resume_version: str | None = Field(default=None, min_length=1)
+    resume_id: str | None = Field(default=None, min_length=1)
 
 
 class ApiError(BaseModel):
@@ -59,12 +66,35 @@ class ApiError(BaseModel):
     message: str
 
 
+class ResumeDto(BaseModel):
+    """简历库列表与状态查询的稳定响应 DTO。"""
+
+    resume_id: str
+    display_version: int
+    file_name: str
+    file_size: int
+    created_at: datetime
+    updated_at: datetime
+    index_status: Literal["pending", "indexing", "indexed", "failed"]
+    error_code: str | None
+    error_message: str | None
+
+
+class ResumeListResponse(BaseModel):
+    """简历库列表响应容器。"""
+
+    resumes: list[ResumeDto]
+
+
 @dataclass(frozen=True)
 class AppDependencies:
     """FastAPI 运行所需的已装配依赖。"""
 
     graph: Any
     session_factory: sessionmaker[Session] | None = None
+    resume_store: Any | None = None
+    embedding_model: Any | None = None
+    resume_storage: ResumeStorage | None = None
     close: Callable[[], None] | None = None
 
 
@@ -97,6 +127,9 @@ def build_dependencies(settings: Settings) -> AppDependencies:
     return AppDependencies(
         graph=build_graph(chat_model, resume_store=resume_store, checkpointer=checkpointer),
         session_factory=session_factory,
+        resume_store=resume_store,
+        embedding_model=embedding_model,
+        resume_storage=ResumeStorage(),
         close=_close,
     )
 
@@ -160,7 +193,7 @@ def create_app(
                 {
                     "thread_id": thread_id,
                     "user_input": _build_analysis_input(request),
-                    "resume_version": request.resume_version,
+                    "resume_id": request.resume_id,
                 },
                 config=config,
             )
@@ -195,13 +228,119 @@ def create_app(
                 initial_state={
                     "thread_id": thread_id,
                     "user_input": _build_analysis_input(request),
-                    "resume_version": request.resume_version,
+                    "resume_id": request.resume_id,
                 },
                 logger=configure_structured_logger(),
             )
         )
         _track_background_task(app, task)
         return JSONResponse(status_code=202, content={"session_id": session_id, "thread_id": thread_id, "status": "accepted"})
+
+    @app.get("/v1/resumes")
+    def list_resumes() -> JSONResponse:
+        """读取长期简历库，按展示版本倒序返回。"""
+
+        session_factory = app.state.dependencies.session_factory
+        if session_factory is None:
+            return _resume_dependencies_unavailable()
+        with session_factory() as session:
+            resumes = ResumeVersionRepository(session).list_versions()
+            return JSONResponse(status_code=200, content={"resumes": [_resume_payload(item) for item in resumes]})
+
+    @app.get("/v1/resumes/{resume_id}")
+    def get_resume(resume_id: str) -> JSONResponse:
+        """读取单个简历索引状态，供前端轮询。"""
+
+        session_factory = app.state.dependencies.session_factory
+        if session_factory is None:
+            return _resume_dependencies_unavailable()
+        with session_factory() as session:
+            entity = ResumeVersionRepository(session).get(resume_id=resume_id)
+            if entity is None:
+                return _error_response(ApiError(code="RESUME_NOT_FOUND", message="Resume was not found"), status_code=404)
+            return JSONResponse(status_code=200, content=_resume_payload(entity))
+
+    @app.post("/v1/resumes")
+    async def upload_resume(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        """受理 TXT 简历上传并在后台建立向量索引。"""
+
+        dependencies = app.state.dependencies
+        if (
+            dependencies.session_factory is None
+            or dependencies.resume_storage is None
+            or dependencies.resume_store is None
+            or dependencies.embedding_model is None
+        ):
+            return _resume_dependencies_unavailable()
+        if not _is_uuid4(idempotency_key):
+            return _error_response(
+                ApiError(code="IDEMPOTENCY_KEY_INVALID", message="Idempotency-Key must be a UUIDv4"), status_code=422
+            )
+        content = await file.read()
+        try:
+            validated = dependencies.resume_storage.validate(file_name=file.filename or "", content=content)
+        except ResumeFileValidationError as error:
+            return _error_response(ApiError(code=error.code, message=str(error)), status_code=422)
+
+        fingerprint = _resume_upload_fingerprint(validated.file_name, validated.content)
+        requested_resume_id = str(uuid4())
+        storage_path = dependencies.resume_storage.save(resume_id=requested_resume_id, content=validated.content)
+        try:
+            with dependencies.session_factory() as session:
+                entity = ResumeVersionRepository(session).create_version(
+                    resume_id=requested_resume_id,
+                    file_name=validated.file_name,
+                    file_size=validated.file_size,
+                    storage_path=storage_path,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
+        except ResumeUploadIdempotencyConflictError as error:
+            dependencies.resume_storage.delete(storage_path)
+            return _error_response(ApiError(code=str(error), message="Idempotency-Key was reused for a different upload"), status_code=409)
+        except Exception:
+            dependencies.resume_storage.delete(storage_path)
+            return _error_response(ApiError(code="RESUME_UPLOAD_FAILED", message="Resume upload could not be accepted"), status_code=500)
+
+        if entity.resume_id != requested_resume_id:
+            dependencies.resume_storage.delete(storage_path)
+            return JSONResponse(status_code=202, content=_resume_payload(entity))
+        background_tasks.add_task(_run_resume_index_task, dependencies, entity.resume_id)
+        return JSONResponse(status_code=202, content=_resume_payload(entity))
+
+    @app.post("/v1/resumes/{resume_id}/retry")
+    def retry_resume_index(resume_id: str, background_tasks: BackgroundTasks) -> JSONResponse:
+        """重新受理失败简历的索引任务。"""
+
+        dependencies = app.state.dependencies
+        if (
+            dependencies.session_factory is None
+            or dependencies.resume_store is None
+            or dependencies.embedding_model is None
+            or dependencies.resume_storage is None
+        ):
+            return _resume_dependencies_unavailable()
+        with dependencies.session_factory() as session:
+            repository = ResumeVersionRepository(session)
+            entity = repository.get(resume_id=resume_id)
+            if entity is None:
+                return _error_response(ApiError(code="RESUME_NOT_FOUND", message="Resume was not found"), status_code=404)
+            if entity.index_status != "failed":
+                return _error_response(
+                    ApiError(code="RESUME_INDEX_CONFLICT", message="Only failed resumes can be retried"), status_code=409
+                )
+            try:
+                entity = repository.mark_indexing(resume_id=resume_id)
+            except ResumeIndexStateConflictError:
+                return _error_response(
+                    ApiError(code="RESUME_INDEX_CONFLICT", message="Resume indexing is already in progress"), status_code=409
+                )
+        background_tasks.add_task(_run_resume_index_task, dependencies, resume_id, False)
+        return JSONResponse(status_code=202, content=_resume_payload(entity))
 
     @app.get("/api/sessions/{session_id}/events")
     async def stream_session_events(session_id: str, request: Request) -> StreamingResponse:
@@ -523,6 +662,82 @@ def _error_response(error: ApiError, *, status_code: int) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": error.model_dump()})
 
 
+def _resume_dependencies_unavailable() -> JSONResponse:
+    """返回简历库运行依赖未完整装配时的稳定错误。"""
+
+    return _error_response(
+        ApiError(code="RESUME_SERVICE_UNAVAILABLE", message="Resume service dependencies are unavailable"),
+        status_code=500,
+    )
+
+
+def _resume_payload(entity: Any) -> dict[str, Any]:
+    """将 ORM 简历版本映射为前端可直接消费的稳定 DTO。"""
+
+    return ResumeDto(
+        resume_id=entity.resume_id,
+        display_version=entity.display_version,
+        file_name=entity.file_name,
+        file_size=entity.file_size,
+        created_at=entity.created_at,
+        updated_at=entity.updated_at,
+        index_status=entity.index_status,
+        error_code=entity.error_code,
+        error_message=entity.error_message,
+    ).model_dump(mode="json")
+
+
+def _is_uuid4(value: str | None) -> bool:
+    """校验上传幂等键必须是 UUIDv4，避免不同格式造成唯一键歧义。"""
+
+    if value is None:
+        return False
+    try:
+        return UUID(value).version == 4
+    except ValueError:
+        return False
+
+
+def _resume_upload_fingerprint(file_name: str, content: bytes) -> str:
+    """计算上传请求指纹，精确识别同一幂等键下的不同文件。
+
+    参数：
+        file_name: 已清理的 UTF-8 文件名。
+        content: 原始上传字节。
+    返回：
+        SHA-256 十六进制摘要。
+    """
+
+    hasher = hashlib.sha256()
+    hasher.update(content)
+    hasher.update(b"\x00")
+    hasher.update(file_name.encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _run_resume_index_task(dependencies: AppDependencies, resume_id: str, mark_started: bool = True) -> None:
+    """在 FastAPI 后台任务中为已受理简历建立索引。
+
+    后台任务必须创建自己的 SQLAlchemy Session，不能跨线程复用上传请求已经关闭的
+    Session。索引服务内部负责把异常转换为 `failed` 状态。
+    """
+
+    if (
+        dependencies.session_factory is None
+        or dependencies.resume_storage is None
+        or dependencies.resume_store is None
+        or dependencies.embedding_model is None
+    ):
+        return
+    with dependencies.session_factory() as session:
+        ResumeIndexService(
+            repository=ResumeVersionRepository(session),
+            storage=dependencies.resume_storage,
+            store=dependencies.resume_store,
+            embedding_model=dependencies.embedding_model,
+        ).index(resume_id=resume_id, mark_started=mark_started)
+
+
 def _serialize(value: Any) -> Any:
     """转换 Pydantic Schema 与 State 容器为 JSON 兼容数据。"""
 
@@ -703,7 +918,7 @@ def _mark_resume_idempotency_failed(session_factory: sessionmaker[Session] | Non
 def _build_analysis_input(request: JobAnalysisRequest) -> str:
     """构造供 Supervisor 判断单任务或组合任务的原始用户意图。"""
 
-    if request.resume_version is None:
+    if request.resume_id is None:
         return "请解析以下岗位要求：\n" + request.jd_text
     return "请先分析以下岗位要求，再匹配指定简历：\n" + request.jd_text
 

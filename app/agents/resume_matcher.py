@@ -14,7 +14,7 @@ from typing import Any, Literal
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.rag.chroma_store import ChromaQueryResult, ChromaResumeStore, ResumeVersionNotFoundError
+from app.rag.chroma_store import ChromaQueryResult, ChromaResumeStore, ResumeNotFoundError
 from app.graph.review_helpers import next_match_business_attempt
 from app.schemas.jd import JDParsed, SkillRequirement
 from app.schemas.resume import EvidenceRef, MatchItem, MatchResult, MatchUnavailableResult, UnavailableEvidenceItem
@@ -30,7 +30,7 @@ from app.services.structured_output import StructuredPromptContext, call_with_st
 
 RAG_EMPTY_RESULT_CODE = "RAG_EMPTY_RESULT"
 RAG_EMPTY_RESULT_GAP = "未从简历中检索到与岗位要求匹配的有效证据，当前匹配结果需人工确认"
-RESUME_VERSION_NOT_FOUND_CODE = "RESUME_VERSION_NOT_FOUND"
+RESUME_NOT_FOUND_CODE = "RESUME_NOT_FOUND"
 MATCH_UNAVAILABLE_CODE = "MATCH_UNAVAILABLE"
 
 
@@ -89,7 +89,7 @@ def resume_matcher_node(
     """执行 JD 与简历的证据绑定匹配。
 
     参数：
-        state: 当前 LangGraph 全局状态，必须包含 `jd_parsed` 与 `resume_version`。
+        state: 当前 LangGraph 全局状态，必须包含 `jd_parsed` 与 `resume_id`。
         chat_model: 已构建好的聊天模型实例，由外部注入。
         resume_store: 第⑨步实现的 Chroma 检索适配器。
 
@@ -98,16 +98,16 @@ def resume_matcher_node(
     """
 
     jd_parsed = state.get("jd_parsed")
-    resume_version = state.get("resume_version")
+    resume_id = state.get("resume_id")
     if not isinstance(jd_parsed, JDParsed):
         raise ValueError("resume_matcher_node requires jd_parsed")
-    if not isinstance(resume_version, str) or not resume_version.strip():
-        raise ValueError("resume_matcher_node requires resume_version")
+    if not isinstance(resume_id, str) or not resume_id.strip():
+        raise ValueError("resume_matcher_node requires resume_id")
 
     current_node = "resume_matcher"
     try:
-        retrieval_context = _collect_requirement_evidence(jd_parsed, resume_version, resume_store)
-    except ResumeVersionNotFoundError as exc:
+        retrieval_context = _collect_requirement_evidence(jd_parsed, resume_id, resume_store)
+    except ResumeNotFoundError as exc:
         return {
             "match_result": None,
             "current_node": current_node,
@@ -120,12 +120,12 @@ def resume_matcher_node(
                     attempt=0,
                 )
             ],
-            "execution_history": [_build_event(current_node, "error", "resume_version_not_found")],
+            "execution_history": [_build_event(current_node, "error", "resume_not_found")],
         }
 
     prompt_context = StructuredPromptContext(
-        full_prompt=_build_match_prompt(jd_parsed, resume_version, retrieval_context),
-        minimal_input=_build_minimal_prompt(jd_parsed, resume_version, retrieval_context),
+        full_prompt=_build_match_prompt(jd_parsed, resume_id, retrieval_context),
+        minimal_input=_build_minimal_prompt(jd_parsed, resume_id, retrieval_context),
     )
     structured_result = call_with_structured_output(
         chat_model,
@@ -145,7 +145,7 @@ def resume_matcher_node(
             )
         )
         return {
-            "match_result": _build_match_unavailable_result(resume_version, retrieval_context),
+            "match_result": _build_match_unavailable_result(resume_id, retrieval_context),
             "current_node": current_node,
             "retry_count": {current_node: structured_result.retry_count},
             "error_log": error_log,
@@ -187,7 +187,7 @@ def resume_matcher_node(
         gaps=gaps,
         recommendations=normalized["recommendations"],
         low_score_review_required=score_breakdown.low_score_review_required,
-        resume_version=resume_version,
+        resume_id=resume_id,
     )
 
     return {
@@ -202,7 +202,7 @@ def resume_matcher_node(
                 execution_detail,
                 metadata={
                     "business_attempt": next_match_business_attempt(state.get("execution_history", [])),
-                    "resume_version": resume_version,
+                    "resume_id": resume_id,
                     "total_score": match_result.total_score,
                 },
             )
@@ -212,7 +212,7 @@ def resume_matcher_node(
 
 def _collect_requirement_evidence(
     jd_parsed: JDParsed,
-    resume_version: str,
+    resume_id: str,
     resume_store: ChromaResumeStore,
 ) -> dict[str, list[dict[str, Any]]]:
     """按 JD 各维度逐项检索证据。"""
@@ -222,19 +222,19 @@ def _collect_requirement_evidence(
 
     return {
         "must_items": [
-            _build_requirement_entry(skill.name, resume_store.query(skill.name, resume_version))
+            _build_requirement_entry(skill.name, resume_store.query(skill.name, resume_id))
             for skill in must_items
         ],
         "responsibility_items": [
-            _build_requirement_entry(resp, resume_store.query(resp, resume_version))
+            _build_requirement_entry(resp, resume_store.query(resp, resume_id))
             for resp in jd_parsed.responsibilities
         ],
         "preferred_items": [
-            _build_requirement_entry(skill.name, resume_store.query(skill.name, resume_version))
+            _build_requirement_entry(skill.name, resume_store.query(skill.name, resume_id))
             for skill in preferred_items
         ],
         "constraint_items": [
-            _build_requirement_entry(req, resume_store.query(req, resume_version))
+            _build_requirement_entry(req, resume_store.query(req, resume_id))
             for req in jd_parsed.experience_requirements + jd_parsed.education_requirements
         ],
     }
@@ -249,7 +249,7 @@ def _build_requirement_entry(requirement: str, evidence_rows: list[ChromaQueryRe
 
 def _build_match_prompt(
     jd_parsed: JDParsed,
-    resume_version: str,
+    resume_id: str,
     retrieval_context: dict[str, list[dict[str, Any]]],
 ) -> str:
     """构造匹配分析 Prompt。"""
@@ -259,7 +259,7 @@ def _build_match_prompt(
         "Decide matched/transferable/weak/missing only from provided evidence.\n"
         "Every evidence item must reuse an existing chunk_id and exact quote from the provided evidence list.\n"
         "Do not generate total_score or dimension scores.\n"
-        f"Resume version: {resume_version}\n"
+        f"Resume ID: {resume_id}\n"
         f"JD title: {jd_parsed.job_title}\n"
         f"Evidence context: {retrieval_context}"
     )
@@ -267,13 +267,13 @@ def _build_match_prompt(
 
 def _build_minimal_prompt(
     jd_parsed: JDParsed,
-    resume_version: str,
+    resume_id: str,
     retrieval_context: dict[str, list[dict[str, Any]]],
 ) -> str:
     """构造 structured output 最小重试上下文。"""
 
     return (
-        f"resume_version={resume_version}\n"
+        f"resume_id={resume_id}\n"
         f"must={[item['requirement'] for item in retrieval_context['must_items']]}\n"
         f"responsibilities={jd_parsed.responsibilities}\n"
         f"preferred={[item['requirement'] for item in retrieval_context['preferred_items']]}\n"
@@ -283,7 +283,7 @@ def _build_minimal_prompt(
 
 
 def _build_match_unavailable_result(
-    resume_version: str,
+    resume_id: str,
     retrieval_context: dict[str, list[dict[str, Any]]],
 ) -> MatchUnavailableResult:
     """把评分前已获取的检索证据保留为无分数的人工核可草稿。"""
@@ -295,7 +295,7 @@ def _build_match_unavailable_result(
     ]
     return MatchUnavailableResult(
         status="MATCH_UNAVAILABLE",
-        resume_version=resume_version,
+        resume_id=resume_id,
         retrieval_evidence=evidence_items,
         message="结构化匹配分析连续失败，未生成匹配分数；请人工检查检索证据后再核可。",
     )

@@ -20,15 +20,15 @@ class LowScoreReviewCommand(BaseModel):
     type: Literal["low_match_score"] = "low_match_score"
     action: Literal["continue", "revise_inputs", "cancel"]
     feedback: str = Field(default="", max_length=2000)
-    resume_version: str | None = Field(default=None, min_length=1, max_length=200)
+    resume_id: str | None = Field(default=None, min_length=1, max_length=200)
     jd_text: str | None = Field(default=None, min_length=20)
 
     @model_validator(mode="after")
     def validate_revise_inputs(self) -> "LowScoreReviewCommand":
         """确保 revise_inputs 至少携带一项可用于重算的修订信息。"""
 
-        if self.action == "revise_inputs" and not (self.feedback.strip() or self.resume_version or self.jd_text):
-            raise ValueError("revise_inputs requires feedback, resume_version, or jd_text")
+        if self.action == "revise_inputs" and not (self.feedback.strip() or self.resume_id or self.jd_text):
+            raise ValueError("revise_inputs requires feedback, resume_id, or jd_text")
         return self
 
 

@@ -6,13 +6,23 @@
 
 from app.db.base import Base
 from app.db.engine import create_sqlalchemy_engine, ensure_database_paths_are_isolated
-from app.db.models import ExperimentRun, ResumeIdempotencyRecord, ReviewAudit
+from app.db.models import (
+    ExperimentRun,
+    ResumeIdempotencyRecord,
+    ResumeUploadIdempotencyRecord,
+    ResumeVersion,
+    ResumeVersionCounter,
+    ReviewAudit,
+)
 from app.db.session import build_session_factory
 
 __all__ = [
     "Base",
     "ExperimentRun",
     "ResumeIdempotencyRecord",
+    "ResumeUploadIdempotencyRecord",
+    "ResumeVersion",
+    "ResumeVersionCounter",
     "ReviewAudit",
     "build_session_factory",
     "create_sqlalchemy_engine",

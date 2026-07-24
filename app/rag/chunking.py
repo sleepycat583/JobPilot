@@ -17,10 +17,10 @@ class ResumeChunk(TypedDict):
     """简历语义 chunk。
 
     字段：
-        chunk_id: 当前 chunk 的稳定标识，格式为 `type-序号`。
+        chunk_id: 当前 chunk 的稳定标识，格式为 `resume_id:type-序号`。
         chunk_type: 五类语义单元之一，供后续检索与评分使用。
         section_type: 与 chunk_type 保持一致，兼容架构文档中的 metadata 示例。
-        resume_version: 简历版本号。
+        resume_id: 简历资源 UUIDv4。
         source_id: 数据来源标识，例如文件名或上传记录 ID。
         source_text: 当前 chunk 的原始文本，用于检索引用。
         start_line/end_line: chunk 在原始文本中的行号范围，便于后续追溯。
@@ -29,7 +29,7 @@ class ResumeChunk(TypedDict):
     chunk_id: str
     chunk_type: ChunkType
     section_type: ChunkType
-    resume_version: str
+    resume_id: str
     source_id: str
     source_text: str
     start_line: int
@@ -61,12 +61,12 @@ DATE_RANGE_RE = re.compile(
 HEADING_RE = re.compile(r"^\s*[一二三四五六七八九十0-9]+[、.．)]\s*(.+?)\s*$")
 
 
-def chunk_resume(text: str, resume_version: str, source_id: str = "resume-main") -> list[ResumeChunk]:
+def chunk_resume(text: str, resume_id: str, source_id: str = "resume-main") -> list[ResumeChunk]:
     """按冻结规则切分简历文本。
 
     参数：
         text: 原始简历全文。
-        resume_version: 当前简历版本标识。
+        resume_id: 当前简历资源 UUIDv4。
         source_id: 当前文本来源标识，默认 `resume-main`。
 
     返回：
@@ -95,10 +95,10 @@ def chunk_resume(text: str, resume_version: str, source_id: str = "resume-main")
             source_text = "\n".join(normalized_lines)
             chunks.append(
                 ResumeChunk(
-                    chunk_id=f"{section_type}-{counters[section_type]:03d}",
+                    chunk_id=f"{resume_id}:{section_type}-{counters[section_type]:03d}",
                     chunk_type=section_type,
                     section_type=section_type,
-                    resume_version=resume_version,
+                    resume_id=resume_id,
                     source_id=source_id,
                     source_text=source_text,
                     start_line=start_line,

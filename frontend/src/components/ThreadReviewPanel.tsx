@@ -35,8 +35,11 @@ export function ThreadReviewPanel({ interrupt, isResuming, error, onResume, onRe
   onRefresh?: () => void
 }) {
   const [feedback, setFeedback] = useState('')
+  const title = interrupt.type === 'final_review'
+    ? interrupt.target === 'jd_parsed' ? '审核 JD 解析结果' : interrupt.target === 'match_result' ? '审核简历匹配结果' : '审核面试报告'
+    : interrupt.type === 'low_match_score' ? '确认低匹配分结果' : '人工审核'
   return <section className="panel">
-    <h2>人工审核</h2>
+    <h2>{title}</h2>
     {interrupt.type === 'low_match_score' ? <LowScoreReviewForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'interview_answer' ? <InterviewAnswerForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'interview_evaluation_unavailable' ? <EvaluationUnavailableForm interrupt={interrupt} disabled={isResuming} onSubmit={onResume} /> : interrupt.type === 'final_review' ? <><>{interrupt.target === 'jd_parsed' ? <JDReviewDraft draft={interrupt.draft} /> : null}</><div className="actions-row">
       <button type="button" className="primary-action" disabled={isResuming} onClick={() => onResume({ action: 'approve' })}>{isResuming ? '提交中...' : '核可'}</button>
       <label className="field-label" htmlFor="final-review-feedback">驳回反馈</label>

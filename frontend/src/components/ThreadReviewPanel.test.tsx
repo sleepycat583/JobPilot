@@ -18,6 +18,10 @@ describe('ThreadReviewPanel', () => {
     expect(screen.getByText('负责接口设计')).toBeInTheDocument()
     expect(screen.getByText('Python')).toBeInTheDocument()
   })
+  it('identifies a match result final review', () => {
+    render(<ThreadReviewPanel interrupt={{ ...interrupt, target: 'match_result' }} isResuming={false} error={null} onResume={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: '审核简历匹配结果' })).toBeInTheDocument()
+  })
   it.each(['IDEMPOTENCY_KEY_REUSED', 'RESUME_IN_PROGRESS', 'CHECKPOINT_NOT_FOUND', 'HITL_COMMAND_INVALID', 'GRAPH_EXECUTION_FAILED'])('shows %s error', (code) => {
     render(<ThreadReviewPanel interrupt={interrupt} isResuming={false} error={{ code, message: '失败' }} onResume={vi.fn()} />)
     expect(screen.getByRole('alert')).toBeInTheDocument()

@@ -229,6 +229,8 @@ def create_app(
                     "thread_id": thread_id,
                     "user_input": _build_analysis_input(request),
                     "resume_id": request.resume_id,
+                    # 前端已通过“开始匹配”明确选择组合任务；该内部意图不能依赖 LLM 再次猜测。
+                    "requested_task_queue": ["jd_parse", "resume_match"] if request.resume_id is not None else None,
                 },
                 logger=configure_structured_logger(),
             )

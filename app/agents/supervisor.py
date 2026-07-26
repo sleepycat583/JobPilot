@@ -67,6 +67,24 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
             ],
         }
 
+    # 业务规则：异步 API 写入 requested_task_queue 时，前端已明确选择组合流程。
+    # 仅消费该结构化意图，避免干扰同步 API 或图内的单 Matcher、面试混合队列。
+    requested_task_queue = state.get("requested_task_queue")
+    if requested_task_queue == ["jd_parse", "resume_match"]:
+        decision = RouterDecision(
+            route="jd_parse",
+            confidence=1.0,
+            reason="Resume was explicitly selected for combined JD analysis and matching",
+            task_queue=["jd_parse", "resume_match"],
+        )
+        return {
+            "route_decision": decision,
+            "task_queue": decision.task_queue,
+            "current_node": "supervisor",
+            "retry_count": {"supervisor": 0},
+            "error_log": [],
+        }
+
     jd_recovery_required = _has_jd_extraction_failure(state)
     prompt_context = StructuredPromptContext(
         full_prompt=_build_supervisor_prompt(stripped_input, state),
@@ -120,6 +138,7 @@ def _build_supervisor_prompt(user_input: str, state: JobAssistantState) -> str:
         f"Conversation summary: {state.get('conversation_summary', '')}\n"
         f"Recent conversation messages: {recent_messages}\n"
         f"Has JD: {state.get('jd_parsed') is not None}\n"
+        f"Has resume: {isinstance(state.get('resume_id'), str) and bool(state.get('resume_id').strip())}\n"
         f"Has match: {state.get('match_result') is not None}\n"
         f"Interview active: {state.get('interview_state') is not None}\n"
         f"JD extraction recovery required: {_has_jd_extraction_failure(state)}\n"

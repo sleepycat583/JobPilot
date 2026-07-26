@@ -45,7 +45,10 @@ function App() {
 
   // 线程审核状态 — 从 SSE 同步 threadId 或持久化 thread 加载
   const review = useThreadReview(threadId ?? progress.threadId, sessionId ?? progress.sessionId)
-  const currentReviewState = review.state?.thread_id === threadId ? review.state : null
+  // 刷新页面时 threadId 尚未写回 App state；此时允许 useThreadReview 从 sessionStorage
+  // 恢复的 Checkpoint 成为当前状态。新建线程后仍严格排除旧线程响应。
+  const currentReviewState = review.state && (!threadId || review.state.thread_id === threadId) ? review.state : null
+  const activeThreadId = threadId ?? currentReviewState?.thread_id ?? null
 
   /**
    * 综合 SSE 和 REST API 两条通路推导统一状态。
@@ -56,11 +59,12 @@ function App() {
    *   确保"任务已受理"提示和按钮 disabled 不会永远卡在 running。
    */
   const effectiveStatus = (() => {
-    if (progress.status === 'idle') return 'idle'
     if (currentReviewState?.status === 'failed' || progress.status === 'failed') return 'failed'
     if (currentReviewState?.status === 'completed' || progress.status === 'completed') return 'completed'
     if (currentReviewState?.interrupt || progress.status === 'interrupted') return 'interrupted'
     if (progress.status === 'running' && Boolean(progress.errorMessage)) return 'failed'
+    if (currentReviewState?.status === 'running' || progress.status === 'running') return 'running'
+    if (progress.status === 'idle') return 'idle'
     return progress.status
   })()
 
@@ -97,17 +101,18 @@ function App() {
   }, [progress.nodeProgress.jd_parser, progress.status, review.loadState, currentReviewState?.jd_parsed, currentReviewState?.interrupt, threadId])
 
   useEffect(() => {
-    if (!threadId || progress.status !== 'running' || currentReviewState?.interrupt) return
+    if (!activeThreadId || currentReviewState?.interrupt || currentReviewState?.status === 'completed' || currentReviewState?.status === 'failed') return
 
     // 异步任务刚受理时，首次状态查询可能早于 Graph 写入 interrupt；SSE 若因
     // 开发代理重连等原因未送达 interrupt_required，轮询 Checkpoint 仍可恢复审核表单。
+    // 不以 SSE 的 running 状态作为前提：中断事件可能先于可读取的 Checkpoint 到达。
     const timer = window.setInterval(() => {
-      void review.loadState(threadId).catch((cause: unknown) => {
+      void review.loadState(activeThreadId).catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : '无法读取审核状态。')
       })
     }, 800)
     return () => window.clearInterval(timer)
-  }, [progress.status, review.loadState, currentReviewState?.interrupt, threadId])
+  }, [activeThreadId, review.loadState, currentReviewState?.interrupt, currentReviewState?.status])
 
   useEffect(() => {
     if (!currentReviewState) return
@@ -166,7 +171,7 @@ function App() {
         <p>当前简历: <b>{fileName}</b><span>（JD 解析不会使用简历）</span></p>
         <div className="analysis-actions">
           <button type="button" className="secondary-button" onClick={() => void analyze('jd')} disabled={effectiveStatus === 'running'}>{effectiveStatus === 'running' ? '分析中...' : '解析 JD'}</button>
-          <button type="button" className="primary-button" onClick={() => void analyze('match')} disabled={effectiveStatus === 'running' || !currentReviewState?.jd_parsed || !resumeLibrary.selectedResumeId}>开始匹配</button>
+          <button type="button" className="primary-button" onClick={() => void analyze('match')} disabled={effectiveStatus === 'running' || !resumeLibrary.selectedResumeId}>开始匹配</button>
         </div>
       </div>
       <div className="tabs" role="tablist" aria-label="分析结果">
@@ -178,7 +183,7 @@ function App() {
       {effectiveStatus === 'failed' && !error ? <div className="state-card error-state"><p>{progress.errorMessage ?? '任务执行失败，请检查模型服务连接后重试。'}</p><button type="button" className="secondary-button" onClick={() => void analyze(tab)}>重试</button></div> : null}
       {tab === 'jd' && currentReviewState?.jd_parsed ? <JDResultPanel result={currentReviewState.jd_parsed} /> : null}
       {tab === 'match' && currentReviewState?.match_result ? <MatchResultPanel result={currentReviewState.match_result} /> : null}
-      {tab === 'match' && !currentReviewState?.match_result && <div className="state-card empty-state"><p>选择已索引的简历后，先完成 JD 解析，再点击“开始匹配”。</p></div>}
+      {tab === 'match' && !currentReviewState?.match_result && <div className="state-card empty-state"><p>选择已索引的简历后，点击“开始匹配”即可提交 JD 与简历的组合分析。</p></div>}
       {currentReviewState?.interrupt ? (
         <ThreadReviewPanel
           interrupt={currentReviewState.interrupt}
@@ -193,7 +198,7 @@ function App() {
       ) : effectiveStatus === 'completed' ? (
         <div className="state-card loading-state"><span className="spinner" />任务已完成，正在同步解析结果...</div>
       ) : null}
-      {threadId && <footer className="thread-footer">thread_id: {threadId}</footer>}
+      {activeThreadId && <footer className="thread-footer">thread_id: {activeThreadId}</footer>}
     </section>
 
     <aside className="progress-sidebar" aria-label="执行进度">
@@ -222,7 +227,9 @@ function progressLabel(node: string): string {
   const labels: Record<string, string> = {
     rolling_summary: '准备上下文', supervisor: '识别任务', queue_dispatch: '分发任务',
     jd_parser: '解析职位描述', prepare_final_review: '准备审核',
-    final_review_gate: '等待人工审核', finalize_node: '生成最终结果', api: '完成任务',
+    final_review_gate: '等待人工审核', resume_matcher: '匹配简历与岗位',
+    prepare_low_score_review: '准备低分审核', low_score_gate: '等待低分确认',
+    finalize_node: '生成最终结果', api: '完成任务',
   }
   return labels[node] ?? node
 }

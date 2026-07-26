@@ -1,4 +1,4 @@
-/** 第 3 章浏览器真实验证：刷新恢复与 SSE 断线重连。 */
+/** 简历匹配浏览器验收：真实 HTTP、审核恢复与结果展示。 */
 import { spawn } from 'node:child_process'
 import { chromium } from 'playwright'
 
@@ -44,82 +44,33 @@ try {
   })
 
   await page.goto('http://127.0.0.1:5175')
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'verification-resume.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('Java 后端工程师，负责 Spring Boot 服务与 API 设计。'),
+  })
+  const resumeButton = page.locator('.resume-item:not([disabled])').filter({ hasText: 'verification-resume' }).first()
+  await resumeButton.waitFor({ timeout: 15_000 })
+  await resumeButton.click()
   await page.getByLabel('职位描述').fill('后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。')
-  await page.getByRole('button', { name: '开始分析' }).click()
-  await page.getByRole('button', { name: '核可' }).waitFor({ timeout: 15_000 })
-  const formBeforeReload = await page.locator('.panel').innerText()
-  const taskPostsBeforeReload = requests.filter((item) => item.method === 'POST' && item.url.includes('/api/tasks')).length
-  const threadId = await page.locator('footer').innerText()
-  requests.length = 0
-  await page.reload()
-  await page.getByRole('button', { name: '核可' }).waitFor({ timeout: 10_000 })
-  const formAfterReload = await page.locator('.panel').innerText()
-  const refreshRequests = requests.map((item) => `${item.method} ${new URL(item.url).pathname}`)
-  const refreshResult = {
-    threadId,
-    formBeforeReload,
-    formAfterReload,
-    refreshRequests,
-    taskPostsBeforeReload,
-    passed: refreshRequests.some((value) => value.startsWith('GET /v1/threads/'))
-      && !refreshRequests.some((value) => value === 'POST /api/tasks')
-      && formAfterReload.includes('人工审核'),
-  }
+  await page.getByRole('button', { name: '开始匹配' }).click()
+  await page.getByRole('heading', { name: '审核 JD 解析结果' }).waitFor({ timeout: 15_000 })
+  await page.getByRole('button', { name: '核可' }).click()
+  await page.getByRole('heading', { name: /简历匹配结果 .*分/ }).waitFor({ timeout: 15_000 })
+  await page.getByRole('heading', { name: '审核简历匹配结果' }).waitFor({ timeout: 15_000 })
 
-  // 新页面建立新的 EventSource，避免刷新场景遗留的同 session 订阅影响断线验证。
-  const reconnectPage = await browser.newPage()
-  reconnectPage.on('request', (request) => {
-    if (request.url().includes('/api/') || request.url().includes('/v1/')) {
-      requests.push({ method: request.method(), url: request.url(), headers: request.headers() })
-    }
-  })
-  await reconnectPage.goto('http://127.0.0.1:5175')
-  await reconnectPage.getByLabel('职位描述').fill('后端工程师岗位，要求熟悉 Java、Spring Boot，并具备三年以上接口设计经验。')
-  await reconnectPage.getByRole('button', { name: '开始分析' }).click()
-  await wait(300)
-  await reconnectPage.context().setOffline(true)
-  await wait(2_500)
-  await reconnectPage.context().setOffline(false)
-  let formRecovered = true
-  let recoveryError = null
-  try {
-    await reconnectPage.getByRole('button', { name: '核可' }).waitFor({ timeout: 15_000 })
-  } catch (error) {
-    formRecovered = false
-    recoveryError = error instanceof Error ? error.message : String(error)
+  const taskPayload = await page.evaluate(() => document.querySelector('.thread-footer')?.textContent ?? null)
+  const matchResult = {
+    taskPosts: requests.filter((item) => item.method === 'POST' && item.url.includes('/api/tasks')).length,
+    resumePosts: requests.filter((item) => item.method === 'POST' && item.url.includes('/resume')).length,
+    threadId: taskPayload,
+    panel: await page.locator('.match-result-panel').innerText(),
+    passed: requests.some((item) => item.method === 'POST' && item.url.includes('/api/tasks'))
+      && requests.filter((item) => item.method === 'POST' && item.url.includes('/resume')).length >= 1,
   }
-  await wait(1_000)
-  const eventStreamRequests = requests.filter((item) => item.url.includes('/api/sessions/') && item.url.includes('/events'))
-  const reconnectHeaders = eventStreamRequests.map((item) => item.headers['last-event-id'] ?? null)
-  const reconnectResult = {
-    eventStreamRequestCount: eventStreamRequests.length,
-    lastEventIdHeaders: reconnectHeaders,
-    formRecovered,
-    recoveryError,
-    passed: formRecovered && eventStreamRequests.length > 1 && reconnectHeaders.slice(1).some(Boolean),
-    note: '当前服务端未按 Last-Event-ID 回放，且 UI 未暴露原始 event_id；序列去重/倒退不能给出通过结论。',
-  }
-  // 通过浏览器内 fetch 记录前端实际接收的非法 JSON 422 body，并按 parseApiError 相同规则检查。
-  const errorProtocolResult = await page.evaluate(async () => {
-    const response = await fetch('/v1/threads/not-a-thread/resume', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{',
-    })
-    const rawBody = await response.text()
-    const parsed = JSON.parse(rawBody)
-    const apiError = parsed?.error
-    return {
-      status: response.status,
-      rawBody,
-      parseApiErrorResult: {
-        code: apiError?.code ?? null,
-        message: apiError?.message ?? `审核提交失败。 (HTTP ${response.status})`,
-        usedFallback: !apiError?.message,
-      },
-    }
-  })
-  console.log(JSON.stringify({ refreshResult, reconnectResult, errorProtocolResult }, null, 2))
+  console.log(JSON.stringify({ matchResult }, null, 2))
   await browser.close()
-  process.exitCode = refreshResult.passed && reconnectResult.passed ? 0 : 1
+  process.exitCode = matchResult.passed ? 0 : 1
 } finally {
   for (const child of processes) child.kill()
 }

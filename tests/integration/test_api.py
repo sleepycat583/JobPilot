@@ -997,12 +997,17 @@ def test_job_analysis_rejects_empty_and_oversized_text_without_500() -> None:
 
 
 def test_job_analysis_exposes_missing_resume_id_without_500() -> None:
+    """RESUME_NOT_FOUND 错误必须路由到 error_node，而非复用旧 review_target 进入假审核。"""
+
     with _client_for(missing_versions={"missing-v1"}) as client:
         initial = client.post("/v1/job-analysis", json={"jd_text": JD_TEXT, "resume_id": "missing-v1"})
         response = client.post(f"/v1/threads/{initial.json()['thread_id']}/resume", json={"action": "approve"})
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["current_node"] == "error_node"
     assert payload["jd_parsed"]["job_title"] == "Java后端工程师"
     assert payload["match_result"] is None
     assert payload["error_log"][0]["code"] == "RESUME_NOT_FOUND"
+    assert payload.get("interrupt") is None

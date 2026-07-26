@@ -47,6 +47,27 @@ def test_supervisor_preserves_combined_task_order() -> None:
 
 
 @pytest.mark.core_agent_tests
+def test_supervisor_forces_combined_flow_when_resume_is_explicitly_selected() -> None:
+    """API 已明确选择简历时，不能被模型错误路由到澄清节点。"""
+    model = FakeChatModel(
+        '{"route":"clarify","confidence":0.95,"reason":"incorrectly asks for JD","task_queue":[]}'
+    )
+
+    result = supervisor_node(
+        {
+            "user_input": "请先分析以下岗位要求，再匹配指定简历：\n完整岗位描述",
+            "resume_id": "resume-v1",
+            "requested_task_queue": ["jd_parse", "resume_match"],
+        },
+        model,
+    )
+
+    assert model.invoke_calls == 0
+    assert result["route_decision"].route == "jd_parse"
+    assert result["task_queue"] == ["jd_parse", "resume_match"]
+
+
+@pytest.mark.core_agent_tests
 def test_supervisor_preserves_mixed_interview_queue_without_normalization() -> None:
     model = FakeChatModel(
         '{"route":"mock_interview","confidence":0.95,"reason":"Interview plus match requested","task_queue":["mock_interview","resume_match"]}'

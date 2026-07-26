@@ -315,9 +315,15 @@ def _resolve_low_score_gate_route(state: JobAssistantState) -> str:
 
 
 def _resolve_match_result_route(state: JobAssistantState) -> str:
-    """低分先进入确认 Gate，其余匹配结果直接等待最终核可。"""
+    """低分先进入确认 Gate，其余匹配结果直接等待最终核可。
+
+    业务规则：match_result 为 None 说明匹配节点遇到不可恢复错误（如简历不存在），
+    不应继续走审核流程，必须路由到 error_node 让用户看到真正的错误信息。
+    """
 
     match_result = state.get("match_result")
+    if match_result is None:
+        return "error"
     # 依赖 MatchUnavailableResult 不含 low_score_review_required；若未来增加同名字段，必须重新检查此路由。
     return "low_score" if bool(getattr(match_result, "low_score_review_required", False)) else "prepare_review"
 

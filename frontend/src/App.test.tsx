@@ -105,6 +105,35 @@ describe('App', () => {
     }))
   })
 
+  it('submits the selected resume and renders the returned match result', async () => {
+    const matchResult = {
+      total_score: 82, dimension_scores: { must: 85 }, matched_items: [], strengths: ['Java 基础扎实'], gaps: [],
+      recommendations: ['补充架构案例'], low_score_review_required: false, resume_id: indexedResume.resume_id,
+    }
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/v1/resumes') return Promise.resolve(jsonResponse({ resumes: [indexedResume] }))
+      if (url === '/api/tasks') return Promise.resolve(jsonResponse({ session_id: 'ses-match', thread_id: 'thr-match', status: 'accepted' }, true, 202))
+      if (url === '/v1/threads/thr-match/state') return Promise.resolve(jsonResponse({
+        thread_id: 'thr-match', session_id: 'ses-match', status: 'interrupted', review_status: 'in_review',
+        review_target: 'match_result', current_node: 'prepare_final_review', interrupt: { type: 'final_review', target: 'match_result', accepted_actions: ['approve', 'reject'], draft: matchResult }, match_result: matchResult,
+      }))
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /v3 · 候选人-后端/ }))
+    await user.type(screen.getByRole('textbox', { name: '职位描述' }), '招聘后端工程师，要求熟悉 Java、Spring Boot 和接口设计。')
+    await user.click(screen.getByRole('button', { name: '开始匹配' }))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/tasks', expect.objectContaining({
+      body: JSON.stringify({ jd_text: '招聘后端工程师，要求熟悉 Java、Spring Boot 和接口设计。', resume_id: indexedResume.resume_id }),
+    }))
+    expect(await screen.findByRole('heading', { name: '简历匹配结果 82 分' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '审核简历匹配结果' })).toBeInTheDocument()
+  })
+
   it('approves via ThreadReviewPanel with resume POST and idempotency_key', async () => {
     vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('idem-test-key') })
     const fetchMock = vi.fn((url: string) => {
@@ -127,7 +156,7 @@ describe('App', () => {
 
     await user.type(screen.getByRole('textbox', { name: '职位描述' }), '招聘 AI 工程师，要求熟悉 Python 和 LangGraph。')
     await user.click(screen.getByRole('button', { name: '解析 JD' }))
-    await screen.findByRole('heading', { name: '人工审核' })
+    await screen.findByRole('heading', { name: '审核 JD 解析结果' })
     await user.click(screen.getByRole('button', { name: '核可' }))
 
     expect(fetchMock).toHaveBeenCalledWith(

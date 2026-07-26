@@ -28,12 +28,20 @@ JD_PARSED = json.dumps({
 
 @dataclass
 class VerificationChatModel:
-    """返回固定结构化 JD，并留出时间窗口供 SSE 断线测试。"""
+    """返回固定结构化 JD 与匹配结论，供完整浏览器流程验证。"""
 
     def invoke(self, prompt: str) -> str:
         time.sleep(0.4)
         if "RouterDecision" in prompt:
-            return json.dumps({"route": "jd_parse", "confidence": 0.9, "reason": "verification", "task_queue": ["jd_parse"]})
+            task_queue = ["jd_parse", "resume_match"] if "Has resume: True" in prompt else ["jd_parse"]
+            return json.dumps({"route": "jd_parse", "confidence": 0.9, "reason": "verification", "task_queue": task_queue})
+        if "LLMMatchAnalysis" in prompt:
+            return json.dumps({
+                "must_items": [{"requirement": "Java", "status": "matched", "rationale": "简历中包含 Java 开发经历", "evidence": [{"chunk_id": "verification-chunk", "quote": "候选人具备 Java、Spring Boot 与 API 设计经历"}]}],
+                "responsibility_items": [{"requirement": "API design", "status": "matched", "rationale": "简历中包含接口设计经历", "evidence": [{"chunk_id": "verification-chunk", "quote": "候选人具备 Java、Spring Boot 与 API 设计经历"}]}],
+                "preferred_items": [], "constraint_items": [],
+                "strengths": ["具备 Java 后端基础"], "gaps": [], "recommendations": ["补充接口设计案例"],
+            }, ensure_ascii=False)
         return JD_PARSED
 
     def bind(self, **_: Any) -> "VerificationChatModel":
@@ -48,7 +56,7 @@ class VerificationEmbeddingModel:
 
 
 class VerificationResumeStore:
-    """提供简历索引路由需要的最小 Chroma 接口，验证 HTTP/UI 生命周期而非向量召回质量。"""
+    """提供确定性检索，验证 HTTP/UI 生命周期而非向量召回质量。"""
 
     def __init__(self) -> None:
         self.resume_ids: set[str] = set()
@@ -60,14 +68,21 @@ class VerificationResumeStore:
         if chunks:
             self.resume_ids.add(chunks[0]["resume_id"])
 
+    def query(self, query_text: str, resume_id: str) -> list[dict[str, object]]:
+        """为已索引简历返回稳定证据，满足 Matcher 的检索接口。"""
+        # 验证 SQLite 会跨脚本运行保留已索引版本，而此内存替身每次启动都会重建；
+        # 因此不能用本进程的写入记录判断历史验证简历是否存在。
+        return [{"chunk_id": "verification-chunk", "quote": "候选人具备 Java、Spring Boot 与 API 设计经历", "relevance": 0.9}]
+
 
 def build_verification_app():
     """装配真实 API、业务库与本地索引替身，用于浏览器端上传验证。"""
 
     checkpointer, checkpoint_connection = open_sqlite_checkpointer("data/checkpoints-verification.sqlite3")
-    engine = create_sqlalchemy_engine("sqlite:///data/app.sqlite3")
+    engine = create_sqlalchemy_engine("sqlite:///data/app-verification.sqlite3")
     Base.metadata.create_all(engine)
-    graph = build_graph(VerificationChatModel(), checkpointer=checkpointer)
+    resume_store = VerificationResumeStore()
+    graph = build_graph(VerificationChatModel(), resume_store=resume_store, checkpointer=checkpointer)
 
     def close() -> None:
         checkpoint_connection.close()
@@ -77,7 +92,7 @@ def build_verification_app():
         dependencies=AppDependencies(
             graph=graph,
             session_factory=build_session_factory(engine),
-            resume_store=VerificationResumeStore(),
+            resume_store=resume_store,
             embedding_model=VerificationEmbeddingModel(),
             resume_storage=ResumeStorage("data/resumes-verification"),
             close=close,

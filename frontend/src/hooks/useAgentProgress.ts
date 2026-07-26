@@ -11,7 +11,7 @@ type ProgressAction =
 
 export type NodeProgressStatus = 'pending' | 'running' | 'completed' | 'interrupted' | 'failed'
 
-/** JD 异步分析的稳定控制流顺序；UI 不再依赖事件到达数量决定列表长度。 */
+/** JD 与简历匹配组合任务的稳定控制流顺序；UI 不再依赖事件到达数量决定列表长度。 */
 export const JD_PROGRESS_NODES = [
   'rolling_summary',
   'supervisor',
@@ -19,6 +19,9 @@ export const JD_PROGRESS_NODES = [
   'jd_parser',
   'prepare_final_review',
   'final_review_gate',
+  'resume_matcher',
+  'prepare_low_score_review',
+  'low_score_gate',
   'finalize_node',
   'api',
 ] as const

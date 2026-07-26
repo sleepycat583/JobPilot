@@ -160,6 +160,13 @@ def test_error_guard_routes_only_matching_latest_unhandled_error_to_error_node()
 
 
 @pytest.mark.core_agent_tests
+def test_match_result_none_routes_to_error_node() -> None:
+    """resume_matcher 返回 match_result=None 时必须路由到 error_node，而非复用旧 review_target 进入审核。"""
+
+    assert _resolve_match_result_route({"match_result": None}) == "error"
+
+
+@pytest.mark.core_agent_tests
 def test_match_unavailable_routes_to_final_review_and_finalizes_serializable_draft() -> None:
     unavailable = MatchUnavailableResult(
         status="MATCH_UNAVAILABLE",

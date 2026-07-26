@@ -62,6 +62,7 @@ class JobAssistantState(TypedDict, total=False):
     messages: list[dict]
     route_decision: RouterDecision | None
     task_queue: list[str]
+    requested_task_queue: list[Literal["jd_parse", "resume_match", "mock_interview"]] | None
 
     jd_parsed: JDParsed | None
     match_result: MatchResult | MatchUnavailableResult | None

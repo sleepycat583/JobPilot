@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -254,11 +255,17 @@ def _build_match_prompt(
 ) -> str:
     """构造匹配分析 Prompt。"""
 
+    schema_json = json.dumps(LLMMatchAnalysis.model_json_schema(), ensure_ascii=False)
     return (
-        "You are a resume matcher. Return only a JSON object that matches LLMMatchAnalysis.\n"
+        "You are a resume matcher. Return only one raw JSON object. Do not use Markdown code fences.\n"
+        "The JSON object must match the supplied JSON Schema at the top level; do not wrap it in an `analysis` field.\n"
         "Decide matched/transferable/weak/missing only from provided evidence.\n"
+        "For must_items, responsibility_items, and preferred_items, status must be exactly one of: "
+        "matched, transferable, weak, missing.\n"
+        "Only constraint_items may use status values satisfied, partial, missing.\n"
         "Every evidence item must reuse an existing chunk_id and exact quote from the provided evidence list.\n"
         "Do not generate total_score or dimension scores.\n"
+        f"JSON Schema: {schema_json}\n"
         f"Resume ID: {resume_id}\n"
         f"JD title: {jd_parsed.job_title}\n"
         f"Evidence context: {retrieval_context}"

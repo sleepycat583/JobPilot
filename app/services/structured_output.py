@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from json import JSONDecodeError
+import re
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -32,6 +33,7 @@ from app.services.observability import redact_text
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 MAX_EXCERPT_LENGTH = 500
+_JSON_CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*\n(?P<body>[\s\S]*?)\n?```\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -95,7 +97,7 @@ def call_with_structured_output(
             raw_response = bound_model.invoke(current_prompt)
             raw_text = _extract_response_text(raw_response)
             last_raw_output = raw_text
-            parsed = schema.model_validate_json(raw_text)
+            parsed = schema.model_validate_json(_unwrap_json_code_fence(raw_text))
             return StructuredOutputResult(
                 value=parsed,
                 retry_count=attempt,
@@ -142,6 +144,23 @@ def _extract_response_text(raw_response: Any) -> str:
         return content
 
     raise TypeError("Model response must be a string or expose string content")
+
+
+def _unwrap_json_code_fence(raw_text: str) -> str:
+    """移除完整包裹 JSON 的 Markdown 代码围栏。
+
+    参数：
+        raw_text: 模型原始文本响应。
+    返回：
+        若整个响应仅由一个 `````json`` 代码块包裹，返回其中内容；其他情况原样返回。
+
+    为什么这样做：
+        部分 OpenAI-compatible 模型会忽略“仅返回 JSON”的提示而添加 Markdown 围栏。
+        围栏不改变 JSON 业务含义，可以安全移除；不能据此推断或修复字段名、枚举值等业务数据。
+    """
+
+    matched = _JSON_CODE_FENCE.match(raw_text)
+    return matched.group("body") if matched is not None else raw_text
 
 
 def _build_retry_prompt(

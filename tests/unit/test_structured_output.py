@@ -122,3 +122,19 @@ def test_structured_output_succeeds_on_first_attempt() -> None:
     assert result.value.label == "ok"
     assert model.call_count_ref["count"] == 1
     assert model.bind_calls == []
+
+
+@pytest.mark.core_agent_tests
+def test_structured_output_accepts_a_single_json_code_fence() -> None:
+    """模型只额外添加 Markdown 围栏时，不应消耗结构化输出重试次数。"""
+
+    model = FakeChatModel(responses=[FakeResponse('```json\n{"value": 1, "label": "ok"}\n```')])
+    context = StructuredPromptContext(full_prompt="FULL PROMPT", minimal_input="MINIMAL INPUT")
+
+    result = call_with_structured_output(model, DemoSchema, context, "match_agent")
+
+    assert result.degraded is False
+    assert result.retry_count == 0
+    assert result.value is not None
+    assert result.value.label == "ok"
+    assert model.call_count_ref["count"] == 1

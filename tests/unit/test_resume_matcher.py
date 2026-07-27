@@ -226,3 +226,21 @@ def test_resume_matcher_writes_only_match_result_business_field() -> None:
     assert "match_result" in result
     assert "jd_parsed" not in result
     assert "interview_state" not in result
+
+
+def test_resume_matcher_prompt_exposes_top_level_schema_and_status_boundaries() -> None:
+    """首次调用必须把真实 Schema 与两个状态枚举的边界传达给模型。"""
+
+    store = FakeResumeStore({})
+    model = FakeChatModel([
+        """{"must_items":[{"requirement":"Java","status":"missing","rationale":"无证据","evidence":[],"recent":false,"quantified":false},{"requirement":"Spring Boot","status":"missing","rationale":"无证据","evidence":[],"recent":false,"quantified":false}],"responsibility_items":[{"requirement":"负责微服务接口设计","status":"missing","rationale":"无证据","evidence":[],"recent":false,"quantified":false}],"preferred_items":[{"requirement":"Kubernetes","status":"missing","rationale":"无证据","evidence":[],"recent":false,"quantified":false}],"constraint_items":[{"requirement":"3年以上后端开发经验","status":"missing","rationale":"无证据","evidence":[]}],"strengths":[],"gaps":[],"recommendations":[]}"""
+    ])
+
+    resume_matcher_node({"jd_parsed": build_jd(), "resume_id": "2026-07-v1"}, model, store)
+
+    prompt = model.prompts[0]
+    assert "Do not use Markdown code fences" in prompt
+    assert "do not wrap it in an `analysis` field" in prompt
+    assert "matched, transferable, weak, missing" in prompt
+    assert "Only constraint_items may use status values satisfied, partial, missing" in prompt
+    assert '"must_items"' in prompt

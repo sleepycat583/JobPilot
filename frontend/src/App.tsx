@@ -7,8 +7,9 @@ import { useResumeLibrary } from './hooks/useResumeLibrary'
 import { ThreadReviewPanel } from './components/ThreadReviewPanel'
 import { JDResultPanel } from './components/JDResultPanel'
 import { MatchResultPanel } from './components/MatchResultPanel'
+import { InterviewPanel } from './components/InterviewPanel'
 import { ResumeLibrary } from './components/ResumeLibrary'
-import type { ApiErrorResponse, TaskAcceptedResponse, ThreadReviewCommand } from './types'
+import type { ApiErrorResponse, InterviewTaskQueue, TaskAcceptedResponse, ThreadReviewCommand } from './types'
 
 /** X-Session-ID 持久化 key（第 0 章全局约束） */
 const SESSION_STORAGE_KEY = 'job-assistant.x-session-id'
@@ -32,7 +33,8 @@ function parseApiError(response: Response, body: unknown, fallback: string): Err
 
 function App() {
   const [jdText, setJdText] = useState('')
-  const [tab, setTab] = useState<'jd' | 'match'>('jd')
+  const [tab, setTab] = useState<'jd' | 'match' | 'interview'>('jd')
+  const [interviewMode, setInterviewMode] = useState<'jd' | 'match'>('jd')
   const [error, setError] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(loadSessionId())
   const [threadId, setThreadId] = useState<string | null>(null)
@@ -131,18 +133,23 @@ function App() {
    * - 后续请求复用持久化的 session_id
    * - 错误按 { error: { code, message } } 解析
    */
-  async function analyze(mode: 'jd' | 'match') {
+  async function analyze(mode: 'jd' | 'match' | 'interview') {
     setError(null)
     try {
       const xSessionId = loadSessionId()
       const body: Record<string, unknown> = { jd_text: jdText }
       // 业务规则：JD 解析只依赖粘贴文本；只有用户主动点击匹配时才发送简历标识。
-      if (mode === 'match') {
+      if (mode === 'match' || (mode === 'interview' && interviewMode === 'match')) {
         if (!resumeLibrary.selectedResumeId) {
           setError('请先选择一份已建立索引的简历，再开始匹配。')
           return
         }
         body.resume_id = resumeLibrary.selectedResumeId
+      }
+      if (mode === 'interview') {
+        body.task_queue = (interviewMode === 'match'
+          ? ['jd_parse', 'resume_match', 'mock_interview']
+          : ['jd_parse', 'mock_interview']) satisfies InterviewTaskQueue
       }
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (xSessionId) headers['X-Session-ID'] = xSessionId
@@ -162,7 +169,7 @@ function App() {
   }
 
   return <main className="workbench">
-    <ResumeLibrary {...resumeLibrary} onSelect={resumeLibrary.select} onClearSelection={resumeLibrary.clearSelection} onUpload={(file) => { void resumeLibrary.upload(file) }} onRetry={(resumeId) => { void resumeLibrary.retry(resumeId) }} onRefresh={() => { void resumeLibrary.refresh() }} />
+    <ResumeLibrary {...resumeLibrary} onSelect={resumeLibrary.select} onClearSelection={resumeLibrary.clearSelection} onUpload={(file) => { void resumeLibrary.upload(file) }} onRetry={(resumeId) => { void resumeLibrary.retry(resumeId) }} onRefresh={() => { void resumeLibrary.refresh() }} onStartInterview={() => setTab('interview')} />
 
     <section className="analysis-area">
       <label htmlFor="jd-input" className="input-label">粘贴职位描述（JD）</label>
@@ -177,6 +184,7 @@ function App() {
       <div className="tabs" role="tablist" aria-label="分析结果">
         <button type="button" role="tab" aria-selected={tab === 'jd'} className={tab === 'jd' ? 'active' : ''} onClick={() => setTab('jd')}>JD 解析</button>
         <button type="button" role="tab" aria-selected={tab === 'match'} className={tab === 'match' ? 'active' : ''} onClick={() => setTab('match')}>匹配结果</button>
+        <button type="button" role="tab" aria-selected={tab === 'interview'} className={tab === 'interview' ? 'active' : ''} onClick={() => setTab('interview')}>模拟面试</button>
       </div>
       {effectiveStatus === 'running' && <div className="state-card loading-state"><span className="spinner" />任务已受理，等待后端执行...</div>}
       {error && <div className="state-card error-state"><p>{error}</p><button type="button" className="secondary-button" onClick={() => void analyze(tab)}>重试</button></div>}
@@ -184,6 +192,17 @@ function App() {
       {tab === 'jd' && currentReviewState?.jd_parsed ? <JDResultPanel result={currentReviewState.jd_parsed} /> : null}
       {tab === 'match' && currentReviewState?.match_result ? <MatchResultPanel result={currentReviewState.match_result} /> : null}
       {tab === 'match' && !currentReviewState?.match_result && <div className="state-card empty-state"><p>选择已索引的简历后，点击“开始匹配”即可提交 JD 与简历的组合分析。</p></div>}
+      {tab === 'interview' && !currentReviewState?.interview_state ? <section className="interview-start state-card">
+        <h2>模拟面试</h2>
+        <div className="segmented-control" role="group" aria-label="面试流程">
+          <button type="button" className={interviewMode === 'jd' ? 'active' : ''} onClick={() => setInterviewMode('jd')}>按 JD 面试</button>
+          <button type="button" className={interviewMode === 'match' ? 'active' : ''} onClick={() => setInterviewMode('match')}>匹配后面试</button>
+        </div>
+        <p>{interviewMode === 'jd' ? '先核可 JD 解析结果，再开始岗位相关的逐题模拟面试。' : '先核可 JD 与简历匹配结果，再根据匹配差距进行面试。'}</p>
+        <button type="button" className="primary-button" onClick={() => void analyze('interview')} disabled={effectiveStatus === 'running' || (interviewMode === 'match' && !resumeLibrary.selectedResumeId)}>{effectiveStatus === 'running' ? '任务执行中...' : '开始面试'}</button>
+        {interviewMode === 'match' && !resumeLibrary.selectedResumeId ? <small>请选择一份已建立索引的简历后再开始。</small> : null}
+      </section> : null}
+      {tab === 'interview' && currentReviewState?.interview_state ? <InterviewPanel interview={currentReviewState.interview_state} /> : null}
       {currentReviewState?.interrupt ? (
         <ThreadReviewPanel
           interrupt={currentReviewState.interrupt}
@@ -229,6 +248,9 @@ function progressLabel(node: string): string {
     jd_parser: '解析职位描述', prepare_final_review: '准备审核',
     final_review_gate: '等待人工审核', resume_matcher: '匹配简历与岗位',
     prepare_low_score_review: '准备低分审核', low_score_gate: '等待低分确认',
+    interview_plan: '生成面试计划', ask_question: '生成面试问题',
+    interview_await_answer: '等待回答', evaluate_answer: '评估回答',
+    interview_decision: '决定下一题', generate_review_report: '生成面试复盘',
     finalize_node: '生成最终结果', api: '完成任务',
   }
   return labels[node] ?? node

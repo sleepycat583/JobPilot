@@ -134,6 +134,30 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: '审核简历匹配结果' })).toBeInTheDocument()
   })
 
+  it('starts JD interview with an explicit frozen task queue', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/v1/resumes') return Promise.resolve(emptyResumeLibraryResponse())
+      if (url === '/api/tasks') return Promise.resolve(jsonResponse({ session_id: 'ses-interview', thread_id: 'thr-interview', status: 'accepted' }, true, 202))
+      if (url === '/v1/threads/thr-interview/state') return Promise.resolve(jsonResponse({
+        thread_id: 'thr-interview', session_id: 'ses-interview', status: 'interrupted', review_status: 'in_review', review_target: 'jd_parsed', current_node: 'final_review_gate',
+        interrupt: { type: 'final_review', target: 'jd_parsed', accepted_actions: ['approve', 'reject'], draft: {} },
+      }))
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.type(screen.getByRole('textbox', { name: '职位描述' }), '招聘后端工程师，要求熟悉 Java、Spring Boot 和接口设计。')
+    await user.click(screen.getByRole('tab', { name: '模拟面试' }))
+    await user.click(screen.getByRole('button', { name: '开始面试' }))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/tasks', expect.objectContaining({
+      body: JSON.stringify({ jd_text: '招聘后端工程师，要求熟悉 Java、Spring Boot 和接口设计。', task_queue: ['jd_parse', 'mock_interview'] }),
+    }))
+    expect(await screen.findByRole('heading', { name: '审核 JD 解析结果' })).toBeInTheDocument()
+  })
+
   it('approves via ThreadReviewPanel with resume POST and idempotency_key', async () => {
     vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('idem-test-key') })
     const fetchMock = vi.fn((url: string) => {

@@ -214,6 +214,35 @@ def test_evaluate_answer_uses_structured_output_retry_without_mutating_record() 
 
 
 @pytest.mark.core_agent_tests
+def test_evaluate_answer_prompt_keeps_four_dimension_hundred_point_contract_on_retries() -> None:
+    """真实模型先给 1~5 分时，重试上下文仍必须明确固定评价契约。"""
+    record = _evaluated_record().model_copy(update={"scores": {}, "feedback": "", "strengths": [], "issues": [], "answer_relevance": None})
+    invalid_five_point = {
+        "scores": {"technical_accuracy": 5, "structure": 5, "job_relevance": 5, "evidence": 5},
+        "feedback": "回答切题。",
+        "strengths": [],
+        "issues": [],
+        "answer_relevance": "on_topic",
+        "fatal_error": False,
+        "fatal_error_reason": None,
+    }
+    valid_hundred_point = {
+        **invalid_five_point,
+        "scores": {"technical_accuracy": 82, "structure": 75, "job_relevance": 80, "evidence": 65},
+    }
+    model = FakeChatModel([invalid_five_point, valid_hundred_point])
+
+    result = evaluate_answer(model, record)
+
+    assert result.value is not None
+    assert result.retry_count == 1
+    assert result.value.scores["technical_accuracy"] == 82.0
+    assert "exactly those four keys" in model.prompts[0]
+    assert "0 to 100" in model.prompts[0]
+    assert "on_topic, job_relevance must be at least 40" in model.prompts[1]
+
+
+@pytest.mark.core_agent_tests
 def test_evaluate_answer_node_marks_only_current_record_unavailable_after_three_failures() -> None:
     previous = _evaluated_record("q-1")
     current = _evaluated_record("q-2", "项目经历").model_copy(

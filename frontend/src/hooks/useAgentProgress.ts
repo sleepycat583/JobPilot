@@ -22,6 +22,12 @@ export const JD_PROGRESS_NODES = [
   'resume_matcher',
   'prepare_low_score_review',
   'low_score_gate',
+  'interview_plan',
+  'ask_question',
+  'interview_await_answer',
+  'evaluate_answer',
+  'interview_decision',
+  'generate_review_report',
   'finalize_node',
   'api',
 ] as const

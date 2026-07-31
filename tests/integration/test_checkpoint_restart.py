@@ -207,7 +207,8 @@ class Model:
                 value = '{"topic":"foundation","question":"Explain a performance investigation."}'
             else:
                 value = '{"topic":"project","question":"Describe a project you owned."}'
-        elif "AnswerEvaluation" in prompt:
+        # 评价节点使用显式业务契约，而不是依赖 Schema 类名出现在 Prompt 中。
+        elif "You are evaluating one mock interview answer" in prompt:
             value = '{"scores":{"technical_accuracy":70,"structure":70,"job_relevance":70,"evidence":70},"feedback":"ok","strengths":[],"issues":[],"answer_relevance":"on_topic","fatal_error":false,"fatal_error_reason":null}'
         elif "InterviewReportNarrative" in prompt:
             value = '{"performance_summary":"limited sample","recurring_strengths":[],"recurring_weaknesses":[],"review_actions":[],"question_references":[]}'

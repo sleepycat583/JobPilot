@@ -68,6 +68,30 @@ def test_supervisor_forces_combined_flow_when_resume_is_explicitly_selected() ->
 
 
 @pytest.mark.core_agent_tests
+@pytest.mark.parametrize(
+    ("requested_queue", "expected_queue"),
+    [
+        (["jd_parse", "mock_interview"], ["jd_parse", "mock_interview"]),
+        (["jd_parse", "resume_match", "mock_interview"], ["jd_parse", "resume_match", "mock_interview"]),
+    ],
+)
+def test_supervisor_uses_explicit_interview_workflow_without_llm(
+    requested_queue: list[str], expected_queue: list[str]
+) -> None:
+    """UI 已选面试流程时，Supervisor 必须直接保留队列和顺序。"""
+    model = FakeChatModel('{"route":"clarify","confidence":0.95,"reason":"unused","task_queue":[]}')
+
+    result = supervisor_node(
+        {"user_input": "完整岗位描述", "requested_task_queue": requested_queue},  # type: ignore[arg-type]
+        model,
+    )
+
+    assert model.invoke_calls == 0
+    assert result["route_decision"].route == "jd_parse"
+    assert result["task_queue"] == expected_queue
+
+
+@pytest.mark.core_agent_tests
 def test_supervisor_preserves_mixed_interview_queue_without_normalization() -> None:
     model = FakeChatModel(
         '{"route":"mock_interview","confidence":0.95,"reason":"Interview plus match requested","task_queue":["mock_interview","resume_match"]}'

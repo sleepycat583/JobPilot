@@ -46,17 +46,19 @@ from pydantic import TypeAdapter, ValidationError
 
 
 class JobAnalysisRequest(BaseModel):
-    """JD 解析及可选简历匹配请求。
+    """JD 分析、简历匹配及模拟面试请求。
 
     参数：
         jd_text: 待解析的 JD 原文，最小长度沿用 JD Schema 的 20 字符约束。
-        resume_id: 提供时在 JD 解析成功后执行简历匹配。
+        resume_id: 提供时可用于简历匹配与面试背景。
+        task_queue: UI 已明确选择的冻结任务队列；缺省时保留旧版 JD/匹配行为。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     jd_text: str
     resume_id: str | None = Field(default=None, min_length=1)
+    task_queue: list[Literal["jd_parse", "resume_match", "mock_interview"]] | None = None
 
 
 class ApiError(BaseModel):
@@ -194,6 +196,7 @@ def create_app(
                     "thread_id": thread_id,
                     "user_input": _build_analysis_input(request),
                     "resume_id": request.resume_id,
+                    "requested_task_queue": request.task_queue,
                 },
                 config=config,
             )
@@ -229,8 +232,9 @@ def create_app(
                     "thread_id": thread_id,
                     "user_input": _build_analysis_input(request),
                     "resume_id": request.resume_id,
-                    # 前端已通过“开始匹配”明确选择组合任务；该内部意图不能依赖 LLM 再次猜测。
-                    "requested_task_queue": ["jd_parse", "resume_match"] if request.resume_id is not None else None,
+                    # 前端已选择固定任务流程时，Graph 不再让 Supervisor 猜测业务意图。
+                    # 旧版仅传 resume_id 的请求仍保持 JD 解析后匹配的兼容行为。
+                    "requested_task_queue": request.task_queue or (["jd_parse", "resume_match"] if request.resume_id is not None else None),
                 },
                 logger=configure_structured_logger(),
             )
@@ -549,6 +553,22 @@ def _validate_request(request: JobAnalysisRequest) -> ApiError | None:
         return ApiError(code="INPUT_TOO_LONG", message=f"jd_text must not exceed {MAX_INPUT_LENGTH} characters")
     if len(request.jd_text) < 20:
         return ApiError(code="INPUT_TOO_SHORT", message="jd_text must contain at least 20 characters")
+    if request.task_queue is not None:
+        allowed_queues = {
+            ("jd_parse", "mock_interview"),
+            ("jd_parse", "resume_match", "mock_interview"),
+        }
+        normalized_queue = tuple(request.task_queue)
+        if normalized_queue not in allowed_queues:
+            return ApiError(
+                code="TASK_QUEUE_INVALID",
+                message="task_queue must be jd_parse -> mock_interview or jd_parse -> resume_match -> mock_interview",
+            )
+        if "resume_match" in request.task_queue and request.resume_id is None:
+            return ApiError(
+                code="RESUME_ID_REQUIRED",
+                message="resume_id is required when task_queue includes resume_match",
+            )
     return None
 
 
@@ -618,6 +638,7 @@ def _snapshot_state_payload(snapshot: Any, *, thread_id: str) -> dict[str, Any]:
         # 不暴露原始 Prompt 或模型中间文本。
         "jd_parsed": _serialize(values.get("jd_parsed")),
         "match_result": _serialize(values.get("match_result")),
+        "interview_state": _serialize(values.get("interview_state")),
         "final_output": _serialize(values.get("final_output")),
     }
 

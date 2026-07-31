@@ -67,15 +67,21 @@ def supervisor_node(state: JobAssistantState, chat_model: BaseChatModel) -> dict
             ],
         }
 
-    # 业务规则：异步 API 写入 requested_task_queue 时，前端已明确选择组合流程。
-    # 仅消费该结构化意图，避免干扰同步 API 或图内的单 Matcher、面试混合队列。
+    # 业务规则：异步 API 写入 requested_task_queue 时，前端已明确选择冻结的组合流程。
+    # 仅消费该结构化意图，避免依赖 LLM 再次猜测，也不干扰同步 API 的自然语言路由。
     requested_task_queue = state.get("requested_task_queue")
-    if requested_task_queue == ["jd_parse", "resume_match"]:
+    normalized_requested_queue = tuple(requested_task_queue) if isinstance(requested_task_queue, list) else ()
+    if normalized_requested_queue in {
+        ("jd_parse", "resume_match"),
+        ("jd_parse", "mock_interview"),
+        ("jd_parse", "resume_match", "mock_interview"),
+    }:
+        task_queue = list(normalized_requested_queue)
         decision = RouterDecision(
             route="jd_parse",
             confidence=1.0,
-            reason="Resume was explicitly selected for combined JD analysis and matching",
-            task_queue=["jd_parse", "resume_match"],
+            reason="UI explicitly selected a frozen task workflow",
+            task_queue=task_queue,
         )
         return {
             "route_decision": decision,

@@ -15,6 +15,7 @@ type ResumeLibraryProps = {
   onUpload: (file: File) => void
   onRetry: (resumeId: string) => void
   onRefresh: () => void
+  onStartInterview?: () => void
 }
 
 const STATUS_LABEL: Record<ResumeDto['index_status'], string> = {
@@ -33,7 +34,7 @@ function formatFileSize(fileSize: number): string {
  *
  * 参数中的状态和回调由 useResumeLibrary 提供，组件不直接调用后端。
  */
-export function ResumeLibrary({ resumes, selectedResumeId, isLoading, isUploading, retryingResumeId, error, onSelect, onClearSelection, onUpload, onRetry, onRefresh }: ResumeLibraryProps) {
+export function ResumeLibrary({ resumes, selectedResumeId, isLoading, isUploading, retryingResumeId, error, onSelect, onClearSelection, onUpload, onRetry, onRefresh, onStartInterview }: ResumeLibraryProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   return <aside className="resume-sidebar" aria-label="简历库">
@@ -59,8 +60,8 @@ export function ResumeLibrary({ resumes, selectedResumeId, isLoading, isUploadin
     <button type="button" className="upload-button" disabled={isUploading} onClick={() => inputRef.current?.click()}>
       <span>+</span>{isUploading ? '正在上传...' : '上传新版本简历'}
     </button>
-    <div className="disabled-tools">
-      <div>模拟面试<span>功能开发中</span></div>
+      <div className="disabled-tools">
+        <button type="button" className="tool-button" onClick={onStartInterview} disabled={!onStartInterview}>模拟面试<span>按 JD 或匹配结果开始</span></button>
       <div>历史记录<span>功能开发中</span></div>
     </div>
   </aside>

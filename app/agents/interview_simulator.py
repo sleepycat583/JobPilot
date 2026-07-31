@@ -252,19 +252,46 @@ def ask_question(
 
 
 def evaluate_answer(chat_model: Any, record: QuestionRecord, *, user_goal: str = "") -> StructuredOutputResult[QuestionRecord]:
-    """评价当前题，并把 LLM 输出与程序持有的题答事实合并为 QuestionRecord。"""
+    """评价当前题，并把 LLM 输出与程序持有的题答事实合并为 QuestionRecord。
+
+    参数：
+        chat_model: 注入的聊天模型。
+        record: 当前已提交答案的题目记录。
+        user_goal: 目标岗位或用户目标，用于判断岗位相关性。
+    返回：
+        校验成功时返回补齐评价字段的题目记录；三次格式失败时返回降级结果。
+    """
 
     if not record.answer.strip():
         raise ValueError("cannot evaluate an empty interview answer")
+    # 为什么这样做：部分 OpenAI-compatible 模型会把“评价”误解为旧字段或 1~5 级量表。
+    # 这些约束既是 Schema 校验规则，也是模型在首次和最小重试上下文中必须看见的业务事实。
+    evaluation_contract = (
+        "Return ONLY one JSON object. Do not use Markdown or any extra keys.\n"
+        "Required object shape: {\"scores\":{\"technical_accuracy\":0,\"structure\":0,"
+        "\"job_relevance\":0,\"evidence\":0},\"feedback\":\"...\",\"strengths\":[...],"
+        "\"issues\":[...],\"answer_relevance\":\"on_topic|partial|off_topic\","
+        "\"fatal_error\":false,\"fatal_error_reason\":null}.\n"
+        "scores MUST contain exactly those four keys and each value MUST be a number from 0 to 100, never a 1-to-5 rating.\n"
+        "If answer_relevance is on_topic, job_relevance must be at least 40. "
+        "If answer_relevance is off_topic, job_relevance must be below 60. "
+        "fatal_error=true requires a non-empty fatal_error_reason, at least one issue, and technical_accuracy below 60; "
+        "otherwise fatal_error must be false and fatal_error_reason must be null.\n"
+    )
     prompt = (
-        "You are evaluating one mock interview answer. Return only JSON matching AnswerEvaluation. "
-        "Judge only the provided question, answer, and target; do not invent resume facts.\n"
+        "You are evaluating one mock interview answer. Judge only the provided question, answer, and target; "
+        "do not invent resume facts.\n"
+        f"{evaluation_contract}"
         f"Target: {user_goal}\nQuestion: {record.question}\nAnswer: {record.answer}"
     )
     raw_result = call_with_structured_output(
         chat_model,
         AnswerEvaluation,
-        StructuredPromptContext(full_prompt=prompt, minimal_input=f"Question: {record.question}\nAnswer: {record.answer}"),
+        StructuredPromptContext(
+            full_prompt=prompt,
+            # 最后一次重试会丢弃完整业务上下文，因此必须保留评价契约而不能只传题答文本。
+            minimal_input=f"{evaluation_contract}Question: {record.question}\nAnswer: {record.answer}",
+        ),
         "evaluate_answer",
     )
     if raw_result.value is None:

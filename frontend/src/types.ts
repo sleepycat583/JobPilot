@@ -175,13 +175,68 @@ export type ThreadStateResponse = {
   interrupt: ThreadInterrupt | null
   jd_parsed?: JDParsed | null
   match_result?: MatchAnalysis | null
+  interview_state?: InterviewState | null
   final_output?: Record<string, unknown> | null
+}
+
+export type InterviewTaskQueue =
+  | ['jd_parse', 'mock_interview']
+  | ['jd_parse', 'resume_match', 'mock_interview']
+
+export type InterviewEvaluation = {
+  technical_accuracy: number
+  structure: number
+  job_relevance: number
+  evidence: number
+}
+
+export type QuestionRecord = {
+  question_id: string
+  topic: string
+  question: string
+  answer: string
+  follow_up_of: string | null
+  scores: InterviewEvaluation | null
+  feedback: string | null
+  strengths: string[]
+  issues: string[]
+  evaluation_status?: 'pending' | 'available' | 'unavailable'
+}
+
+export type ReviewAction = {
+  priority: 'P0' | 'P1' | 'P2'
+  weakness: string
+  related_questions: string[]
+  study_topic: string
+  practice_action: string
+  verification: string
+}
+
+export type InterviewReport = {
+  overall_score: number
+  dimension_scores: Record<string, number>
+  performance_summary: string
+  recurring_strengths: string[]
+  recurring_weaknesses: string[]
+  review_actions: ReviewAction[]
+  question_references: string[]
+}
+
+/** 面试运行快照，由线程状态接口返回，支持刷新后恢复题目记录与报告。 */
+export type InterviewState = {
+  status: 'planning' | 'asking' | 'waiting' | 'evaluating' | 'completed'
+  target_question_count: number
+  current_question_id: string | null
+  question_records: QuestionRecord[]
+  user_context_updates: string[]
+  report: InterviewReport | null
 }
 
 /** POST /api/tasks 和 POST /v1/job-analysis 共用请求体 */
 export type JobAnalysisRequest = {
   jd_text: string
   resume_id?: string
+  task_queue?: InterviewTaskQueue
 }
 
 /** 后端统一错误响应格式（第 0 章全局约束） */

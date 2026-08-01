@@ -11,6 +11,7 @@ const STORAGE_KEY = 'job-assistant.active-thread'
 
 type StoredThread = { threadId: string; sessionId: string }
 type ReviewApiError = Error & { code?: string }
+type ReviewRequest = { interruptFingerprint: string; idempotencyKey: string }
 
 function buildApiError(payload: unknown, fallback: string): ReviewApiError {
   const apiError = (payload as { error?: { code?: string; message?: string } } | null)?.error
@@ -41,38 +42,43 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
   const [error, setError] = useState<{ code?: string; message: string } | null>(null)
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const lastCommandRef = useRef<ThreadReviewCommand | null>(null)
-  const interruptFingerprintRef = useRef<string | null>(null)
+  const reviewRequestRef = useRef<ReviewRequest | null>(null)
   // 保持 sessionId 最新引用，避免闭包 stale（loadState/resume 中用于 Header）
   const sessionIdRef = useRef(sessionId)
   sessionIdRef.current = sessionId
 
-  const applyState = useCallback((payload: ThreadStateResponse) => {
+  const applyState = useCallback((payload: ThreadStateResponse, forceNewKey = false) => {
     const fingerprint = payload.interrupt ? JSON.stringify(payload.interrupt) : null
     setState(payload)
-    setIdempotencyKey((currentKey) => {
-      if (!fingerprint) {
-        interruptFingerprintRef.current = null
-        return null
-      }
-      if (interruptFingerprintRef.current === fingerprint && currentKey) return currentKey
-      interruptFingerprintRef.current = fingerprint
-      return crypto.randomUUID()
-    })
+    if (!fingerprint) {
+      reviewRequestRef.current = null
+      setIdempotencyKey(null)
+      return
+    }
+    const currentRequest = reviewRequestRef.current
+    if (!forceNewKey && currentRequest?.interruptFingerprint === fingerprint) {
+      setIdempotencyKey(currentRequest.idempotencyKey)
+      return
+    }
+    // 将 key 和 interrupt 指纹同步写入 ref，避免 React state 尚未渲染时新表单提交了旧审核的 key。
+    const nextRequest = { interruptFingerprint: fingerprint, idempotencyKey: crypto.randomUUID() }
+    reviewRequestRef.current = nextRequest
+    setIdempotencyKey(nextRequest.idempotencyKey)
   }, [])
 
-  const loadState = useCallback(async (id: string) => {
+  const loadState = useCallback(async (id: string, forceNewKey = false) => {
     const response = await fetch(`/v1/threads/${id}/state`, { headers: buildHeaders(sessionIdRef.current) })
     if (!response.ok) {
       const error = buildApiError(await response.json().catch(() => null), '无法恢复当前审核状态。')
       if (error.code === 'CHECKPOINT_NOT_FOUND' || response.status === 404) {
         setState(null)
         setIdempotencyKey(null)
-        interruptFingerprintRef.current = null
+        reviewRequestRef.current = null
       }
       throw error
     }
     const payload = (await response.json()) as ThreadStateResponse
-    applyState(payload)
+    applyState(payload, forceNewKey)
     return payload
   }, [applyState])
 
@@ -91,14 +97,16 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
   }, [loadState, sessionId, threadId])
 
   const resume = useCallback(async (command: ThreadReviewCommand) => {
-    if (!state?.interrupt || !idempotencyKey || isResuming) return
+    const interruptFingerprint = state?.interrupt ? JSON.stringify(state.interrupt) : null
+    const request = reviewRequestRef.current
+    if (!state?.interrupt || !interruptFingerprint || !request || request.interruptFingerprint !== interruptFingerprint || isResuming) return
     lastCommandRef.current = command
     setIsResuming(true)
     setError(null)
     try {
       const response = await fetch(`/v1/threads/${state.thread_id}/resume`, {
         method: 'POST', headers: buildHeaders(sessionIdRef.current),
-        body: JSON.stringify({ idempotency_key: idempotencyKey, command }),
+        body: JSON.stringify({ idempotency_key: request.idempotencyKey, command }),
       })
       // 业务规则：409 表示幂等键冲突或恢复请求仍在处理中，
       // 不应重试（同一 key + command 会继续 409），需刷新页面获取新 key。
@@ -106,7 +114,12 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
         const fallback = response.status === 409
           ? '请求冲突：该审核指令已提交或正在处理中，请刷新页面。'
           : '审核提交失败。'
-        throw buildApiError(await response.json().catch(() => null), fallback)
+        const apiError = buildApiError(await response.json().catch(() => null), fallback)
+        if (apiError.code === 'IDEMPOTENCY_KEY_REUSED') {
+          // 同一 interrupt 的旧 key 曾用于其他指令时，必须从 checkpoint 获取当前表单并换发 key。
+          await loadState(state.thread_id, true)
+        }
+        throw apiError
       }
       const next = (await response.json()) as ThreadStateResponse
       applyState(next)
@@ -115,7 +128,7 @@ export function useThreadReview(threadId: string | null, sessionId: string | nul
     } finally {
       setIsResuming(false)
     }
-  }, [applyState, idempotencyKey, isResuming, state])
+  }, [applyState, isResuming, loadState, state])
 
   const retry = useCallback(() => {
     if (lastCommandRef.current) void resume(lastCommandRef.current)

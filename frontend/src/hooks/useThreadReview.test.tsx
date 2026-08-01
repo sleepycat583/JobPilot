@@ -49,7 +49,7 @@ describe('useThreadReview', () => {
   })
 
   it('surfaces the error code when resume is rejected with 409', async () => {
-    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue('key-1') })
+    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('key-1').mockReturnValueOnce('key-2') })
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -60,6 +60,10 @@ describe('useThreadReview', () => {
         status: 409,
         json: async () => ({ error: { code: 'IDEMPOTENCY_KEY_REUSED', message: '幂等键已被使用，请刷新页面。' } }),
       })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'match_result', current_node: 'low_score_gate', interrupt: { type: 'low_match_score', target: 'match_result', score: 43.5, threshold: 60, top_gaps: [], accepted_actions: ['continue', 'cancel', 'revise_inputs'] } }),
+      })
     vi.stubGlobal('fetch', fetchMock)
 
     const { result } = renderHook(() => useThreadReview(null, null))
@@ -69,6 +73,27 @@ describe('useThreadReview', () => {
     await act(async () => { await result.current.resume({ action: 'approve' }) })
     expect(result.current.error?.code).toBe('IDEMPOTENCY_KEY_REUSED')
     expect(result.current.error?.message).toContain('幂等键已被使用')
+    expect(result.current.idempotencyKey).toBe('key-2')
+    expect(result.current.state?.interrupt?.type).toBe('low_match_score')
+  })
+
+  it('uses the key paired with a newly loaded low-score interrupt', async () => {
+    const lowScoreInterrupt = { type: 'low_match_score' as const, target: 'match_result' as const, score: 43.5, threshold: 60, top_gaps: [], accepted_actions: ['continue', 'cancel', 'revise_inputs'] }
+    vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('jd-key').mockReturnValueOnce('low-score-key') })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'jd_parsed', current_node: 'review', interrupt: firstInterrupt }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'match_result', current_node: 'low_score_gate', interrupt: lowScoreInterrupt }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ thread_id: 'thread-1', session_id: 'session-1', status: 'interrupted', review_status: 'in_review', review_target: 'match_result', current_node: 'review', interrupt: firstInterrupt }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useThreadReview(null, null))
+    await act(async () => { await result.current.loadState('thread-1') })
+    await act(async () => { await result.current.loadState('thread-1') })
+    await act(async () => { await result.current.resume({ action: 'continue' }) })
+
+    const request = JSON.parse(fetchMock.mock.calls[2][1].body)
+    expect(request.idempotency_key).toBe('low-score-key')
+    expect(request.command).toEqual({ action: 'continue' })
   })
 
   it('reports a fallback conflict message for 409 without a backend error body', async () => {

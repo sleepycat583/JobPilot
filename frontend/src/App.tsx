@@ -202,8 +202,8 @@ function App() {
         <button type="button" className="primary-button" onClick={() => void analyze('interview')} disabled={effectiveStatus === 'running' || (interviewMode === 'match' && !resumeLibrary.selectedResumeId)}>{effectiveStatus === 'running' ? '任务执行中...' : '开始面试'}</button>
         {interviewMode === 'match' && !resumeLibrary.selectedResumeId ? <small>请选择一份已建立索引的简历后再开始。</small> : null}
       </section> : null}
-      {tab === 'interview' && currentReviewState?.interview_state ? <InterviewPanel interview={currentReviewState.interview_state} /> : null}
-      {currentReviewState?.interrupt ? (
+      {tab === 'interview' && currentReviewState?.interview_state ? <InterviewPanel interview={currentReviewState.interview_state} answerInterrupt={currentReviewState.interrupt?.type === 'interview_answer' ? currentReviewState.interrupt : null} isResuming={review.isResuming} onResume={(command) => { void review.resume(command) }} /> : null}
+      {currentReviewState?.interrupt && currentReviewState.interrupt.type !== 'interview_answer' ? (
         <ThreadReviewPanel
           interrupt={currentReviewState.interrupt}
           isResuming={review.isResuming}

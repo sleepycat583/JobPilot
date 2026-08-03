@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import fitz
 from fastapi.testclient import TestClient
 
 from app.api import AppDependencies, create_app
@@ -87,6 +88,28 @@ def test_upload_indexes_resume_then_lists_and_reads_status(tmp_path: Path) -> No
         assert [item["resume_id"] for item in listing.json()["resumes"]] == [payload["resume_id"]]
 
 
+def test_upload_indexes_text_layer_pdf_resume(tmp_path: Path) -> None:
+    client, store = _client(tmp_path)
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Python engineer with resume PDF text layer")
+    pdf_content = document.tobytes()
+    document.close()
+    with client:
+        response = _upload(
+            client,
+            key="00000000-0000-4000-8000-000000000103",
+            name="resume.pdf",
+            content=pdf_content,
+        )
+
+        assert response.status_code == 202
+        payload = response.json()
+        status = client.get(f"/v1/resumes/{payload['resume_id']}")
+        assert status.json()["index_status"] == "indexed"
+        assert store.operations == [f"delete:{payload['resume_id']}", "upsert"]
+
+
 def test_upload_replays_same_key_and_rejects_different_file(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     key = "00000000-0000-4000-8000-000000000101"
@@ -109,7 +132,7 @@ def test_upload_rejects_invalid_key_and_file_rules(tmp_path: Path) -> None:
         blank = _upload(client, key="00000000-0000-4000-8000-000000000102", content=b"   \n")
 
         assert invalid_key.json()["error"]["code"] == "IDEMPOTENCY_KEY_INVALID"
-        assert unsupported.json()["error"]["code"] == "RESUME_FILE_TYPE_UNSUPPORTED"
+        assert unsupported.json()["error"]["code"] == "RESUME_PDF_INVALID"
         assert blank.json()["error"]["code"] == "RESUME_TEXT_EMPTY"
 
 

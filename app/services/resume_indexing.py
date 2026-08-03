@@ -12,16 +12,18 @@ from app.rag.chunking import chunk_resume
 from app.rag.indexing import index_resume_chunks
 from app.repositories.resume_versions import ResumeVersionRepository
 from app.services.resume_storage import ResumeFileValidationError, ResumeStorage
+from app.services.resume_extraction import ResumeTextExtractor
 
 
 class ResumeIndexService:
     """将原始文件转换为可检索 Chroma chunk 的服务。"""
 
-    def __init__(self, *, repository: ResumeVersionRepository, storage: ResumeStorage, store: Any, embedding_model: Any) -> None:
+    def __init__(self, *, repository: ResumeVersionRepository, storage: ResumeStorage, store: Any, embedding_model: Any, extractor: ResumeTextExtractor | None = None) -> None:
         self._repository = repository
         self._storage = storage
         self._store = store
         self._embedding_model = embedding_model
+        self._extractor = extractor or ResumeTextExtractor()
 
     def index(self, *, resume_id: str, mark_started: bool = True) -> None:
         """为指定简历重建向量索引并回写终态。
@@ -45,7 +47,7 @@ class ResumeIndexService:
         if version is None or version.index_status != "indexing":
             return
         try:
-            text = self._storage.read_text(version.storage_path)
+            text = self._extractor.extract(version.storage_path)
             chunks = chunk_resume(text, resume_id=resume_id, source_id=version.file_name)
             if not chunks:
                 raise ResumeFileValidationError("RESUME_TEXT_EMPTY", "Resume text produced no indexable chunks")

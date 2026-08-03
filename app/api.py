@@ -29,6 +29,7 @@ from app.graph.builder import build_graph
 from app.graph.checkpoint import open_sqlite_checkpointer
 from app.providers.chat_model import build_chat_model
 from app.providers.embedding import build_embedding_model
+from app.providers.vision_model import build_vision_model
 from app.rag.chroma_store import ChromaResumeStore
 from app.repositories.resume_idempotency import ResumeIdempotencyConflictError, ResumeIdempotencyRepository
 from app.repositories.resume_versions import (
@@ -41,6 +42,7 @@ from app.schemas.review import HITLCommand, ResumeRequest
 from app.services.event_bus import SessionEventBus, SessionSubscriptionClosed
 from app.services.observability import build_log_event, configure_event_publisher, configure_structured_logger, publish_run_completed_event
 from app.services.resume_indexing import ResumeIndexService
+from app.services.resume_extraction import ResumeTextExtractor
 from app.services.resume_storage import ResumeFileValidationError, ResumeStorage
 from pydantic import TypeAdapter, ValidationError
 
@@ -97,6 +99,7 @@ class AppDependencies:
     resume_store: Any | None = None
     embedding_model: Any | None = None
     resume_storage: ResumeStorage | None = None
+    resume_extractor: ResumeTextExtractor | None = None
     close: Callable[[], None] | None = None
 
 
@@ -117,6 +120,7 @@ def build_dependencies(settings: Settings) -> AppDependencies:
     ensure_database_paths_are_isolated(settings.sqlalchemy_database_url, settings.langgraph_checkpoint_path)
     chat_model = build_chat_model(settings)
     embedding_model = build_embedding_model(settings)
+    vision_model = build_vision_model(settings)
     resume_store = ChromaResumeStore(settings, embedding_model)
     checkpointer, connection = open_sqlite_checkpointer(settings.langgraph_checkpoint_path)
     engine = create_sqlalchemy_engine(settings.sqlalchemy_database_url)
@@ -132,6 +136,7 @@ def build_dependencies(settings: Settings) -> AppDependencies:
         resume_store=resume_store,
         embedding_model=embedding_model,
         resume_storage=ResumeStorage(),
+        resume_extractor=ResumeTextExtractor(vision_model=vision_model),
         close=_close,
     )
 
@@ -200,9 +205,21 @@ def create_app(
                 },
                 config=config,
             )
-        except Exception:
+        except Exception as error:
+            logger = configure_structured_logger()
+            failure_detail = _graph_failure_detail(error)
+            logger.error(build_log_event(
+                event="graph_execution_failed",
+                session_id=session_id,
+                thread_id=thread_id,
+                node="api",
+                node_kind="control",
+                success=False,
+                error_code=failure_detail,
+                message=str(error),
+            ))
             return _error_response(
-                ApiError(code="GRAPH_EXECUTION_FAILED", message="Job analysis graph execution failed"),
+                ApiError(code=failure_detail, message=_graph_failure_message(failure_detail)),
                 status_code=500,
             )
 
@@ -272,7 +289,7 @@ def create_app(
         file: UploadFile = File(...),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> JSONResponse:
-        """受理 TXT 简历上传并在后台建立向量索引。"""
+        """受理 TXT/PDF 简历上传并在后台建立向量索引。"""
 
         dependencies = app.state.dependencies
         if (
@@ -294,7 +311,9 @@ def create_app(
 
         fingerprint = _resume_upload_fingerprint(validated.file_name, validated.content)
         requested_resume_id = str(uuid4())
-        storage_path = dependencies.resume_storage.save(resume_id=requested_resume_id, content=validated.content)
+        storage_path = dependencies.resume_storage.save(
+            resume_id=requested_resume_id, content=validated.content, suffix=validated.suffix
+        )
         try:
             with dependencies.session_factory() as session:
                 entity = ResumeVersionRepository(session).create_version(
@@ -738,6 +757,28 @@ def _resume_upload_fingerprint(file_name: str, content: bytes) -> str:
     return hasher.hexdigest()
 
 
+def _graph_failure_detail(error: Exception) -> str:
+    """将外部模型异常映射为安全且可行动的稳定错误码。"""
+
+    error_text = str(error).casefold()
+    if "invalid_api_key" in error_text or "invalid api-key" in error_text or "401" in error_text:
+        return "LLM_AUTH_FAILED"
+    if "timeout" in error_text or "timed out" in error_text:
+        return "LLM_TIMEOUT"
+    return "GRAPH_EXECUTION_FAILED"
+
+
+def _graph_failure_message(error_code: str) -> str:
+    """返回不泄露密钥且能指导排查的错误提示。"""
+
+    messages = {
+        "LLM_AUTH_FAILED": "模型服务鉴权失败，请检查阿里云 API Key、业务空间和地域配置。",
+        "LLM_TIMEOUT": "模型服务请求超时，请稍后重试。",
+        "GRAPH_EXECUTION_FAILED": "任务执行失败，请查看服务日志后重试。",
+    }
+    return messages.get(error_code, messages["GRAPH_EXECUTION_FAILED"])
+
+
 def _run_resume_index_task(dependencies: AppDependencies, resume_id: str, mark_started: bool = True) -> None:
     """在 FastAPI 后台任务中为已受理简历建立索引。
 
@@ -758,6 +799,7 @@ def _run_resume_index_task(dependencies: AppDependencies, resume_id: str, mark_s
             storage=dependencies.resume_storage,
             store=dependencies.resume_store,
             embedding_model=dependencies.embedding_model,
+            extractor=dependencies.resume_extractor or ResumeTextExtractor(),
         ).index(resume_id=resume_id, mark_started=mark_started)
 
 
@@ -978,14 +1020,25 @@ async def _run_graph_in_background(
     config = {"configurable": {"thread_id": thread_id, "session_id": session_id}}
     try:
         state = await asyncio.to_thread(graph.invoke, initial_state, config)
-    except Exception:
+    except Exception as error:
+        failure_detail = _graph_failure_detail(error)
+        logger.error(build_log_event(
+            event="graph_execution_failed",
+            session_id=session_id,
+            thread_id=thread_id,
+            node="api",
+            node_kind="control",
+            success=False,
+            error_code=failure_detail,
+            message=str(error),
+        ))
         _publish_graph_run_event(
             event_bus=event_bus,
             logger=logger,
             event_name="run_failed",
             session_id=session_id,
             thread_id=thread_id,
-            detail="GRAPH_EXECUTION_FAILED",
+            detail=failure_detail,
             level="error",
         )
         return

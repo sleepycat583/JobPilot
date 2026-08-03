@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import fitz
+
 import pytest
 
 from app.db import Base, build_session_factory, create_sqlalchemy_engine
 from app.repositories.resume_versions import ResumeVersionRepository
 from app.services.resume_indexing import ResumeIndexService
+from app.services.resume_extraction import ResumeTextExtractor
 from app.services.resume_storage import (
     MAX_RESUME_FILE_SIZE_BYTES,
     ResumeFileValidationError,
@@ -68,9 +71,9 @@ def test_storage_validates_frozen_txt_rules_and_saves_original_content(tmp_path)
 
     assert validated.file_name == "resume.TXT"
     assert storage.read_text(path) == "简历内容"
-    with pytest.raises(ResumeFileValidationError) as unsupported:
+    with pytest.raises(ResumeFileValidationError) as invalid_pdf:
         storage.validate(file_name="resume.pdf", content=b"x")
-    assert unsupported.value.code == "RESUME_FILE_TYPE_UNSUPPORTED"
+    assert invalid_pdf.value.code == "RESUME_PDF_INVALID"
     with pytest.raises(ResumeFileValidationError) as too_large:
         storage.validate(file_name="resume.txt", content=b"x" * (MAX_RESUME_FILE_SIZE_BYTES + 1))
     assert too_large.value.code == "RESUME_FILE_TOO_LARGE"
@@ -116,5 +119,42 @@ def test_index_service_marks_version_failed_when_chroma_write_fails(tmp_path) ->
             failed = repository.get(resume_id=resume_id)
             assert failed.index_status == "failed"
             assert failed.error_code == "RESUME_INDEX_FAILED"
+    finally:
+        engine.dispose()
+
+
+def test_index_service_indexes_text_layer_pdf(tmp_path) -> None:
+    engine, factory = _repository(tmp_path)
+    try:
+        with factory() as session:
+            storage = ResumeStorage(tmp_path / "resumes")
+            repository = ResumeVersionRepository(session)
+            resume_id = "00000000-0000-4000-8000-000000000002"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "Resume Python engineer experience")
+            pdf_content = document.tobytes()
+            document.close()
+            validated = storage.validate(file_name="resume.pdf", content=pdf_content)
+            repository.create_version(
+                resume_id=resume_id,
+                file_name=validated.file_name,
+                file_size=validated.file_size,
+                storage_path=storage.save(resume_id=resume_id, content=validated.content, suffix=validated.suffix),
+                idempotency_key="00000000-0000-4000-8000-000000000102",
+                request_fingerprint="b" * 64,
+            )
+            store = FakeResumeStore()
+
+            ResumeIndexService(
+                repository=repository,
+                storage=storage,
+                store=store,
+                embedding_model=FakeEmbeddingModel(),
+                extractor=ResumeTextExtractor(),
+            ).index(resume_id=resume_id)
+
+            assert repository.get(resume_id=resume_id).index_status == "indexed"
+            assert [operation[0] for operation in store.operations] == ["delete", "upsert"]
     finally:
         engine.dispose()

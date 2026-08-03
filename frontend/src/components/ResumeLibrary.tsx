@@ -1,4 +1,4 @@
-/** 左侧简历库：显示版本、上传 TXT 文件及失败索引的重试操作。 */
+/** 左侧简历库：显示版本、上传 TXT/PDF 文件及失败索引的重试操作。 */
 import { useRef } from 'react'
 
 import type { ResumeDto } from '../types'
@@ -39,7 +39,7 @@ export function ResumeLibrary({ resumes, selectedResumeId, isLoading, isUploadin
 
   return <aside className="resume-sidebar" aria-label="简历库">
     <div className="sidebar-heading"><h1>简历库</h1><button type="button" className="icon-button" onClick={onRefresh} aria-label="刷新简历库" title="刷新简历库">↻</button></div>
-    <input ref={inputRef} className="visually-hidden" type="file" accept=".txt,text/plain" onChange={(event) => {
+    <input ref={inputRef} className="visually-hidden" type="file" accept=".txt,text/plain,.pdf,application/pdf" onChange={(event) => {
       const file = event.target.files?.[0]
       if (file) onUpload(file)
       event.currentTarget.value = ''

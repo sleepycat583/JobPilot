@@ -16,7 +16,7 @@ function replaceResume(resumes: ResumeDto[], next: ResumeDto): ResumeDto[] {
 }
 
 function validateUploadFile(file: File): string | null {
-  if (!file.name.toLowerCase().endsWith('.txt')) return '仅支持上传 UTF-8 编码的 .txt 简历。'
+  if (!/\.(txt|pdf)$/i.test(file.name)) return '仅支持上传 UTF-8 编码的 .txt 或可解析的 .pdf 简历。'
   if (file.size > MAX_RESUME_FILE_SIZE) return '简历文件不能超过 2 MB。'
   return null
 }

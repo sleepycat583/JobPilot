@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     base_url: str
     model_name: str
     api_key: str
+    vision_model_name: str = "qwen3-vl-flash"
+    vision_base_url: str = ""
+    vision_api_key: str = ""
     chroma_persist_dir: str
     sqlalchemy_database_url: str = "sqlite:///./data/app.sqlite3"
     langgraph_checkpoint_path: str = "./data/checkpoints.sqlite3"

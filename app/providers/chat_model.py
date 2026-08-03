@@ -43,6 +43,9 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
         model=settings.model_name,
         api_key=settings.api_key,
         timeout=30,
+        # 百炼 Qwen3 的 thinking mode 不接受 LangChain 结构化输出附带的 tool_choice=required。
+        # 现有 Agent 依赖 Schema 门卫，因此文本链路统一关闭 thinking，保留工具式结构化输出。
+        extra_body={"enable_thinking": False},
         # Provider 层禁用透明重试，避免与第⑤步节点级结构化输出重试叠加，导致调用次数失控。
         max_retries=0,
     ))

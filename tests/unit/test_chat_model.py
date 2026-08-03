@@ -64,4 +64,5 @@ def test_build_chat_model_passes_expected_arguments(monkeypatch: pytest.MonkeyPa
     assert captured["model"] == "deepseek-chat"
     assert captured["api_key"] == "test-key"
     assert captured["timeout"] == 30
+    assert captured["extra_body"] == {"enable_thinking": False}
     assert captured["max_retries"] == 0

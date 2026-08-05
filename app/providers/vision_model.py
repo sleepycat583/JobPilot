@@ -31,6 +31,6 @@ def build_vision_model(settings: Settings) -> BaseChatModel | None:
         base_url=settings.vision_base_url or settings.base_url,
         model=settings.vision_model_name,
         api_key=settings.vision_api_key or settings.api_key,
-        timeout=60,
+        timeout=settings.vision_timeout_seconds,
         max_retries=0,
     ))

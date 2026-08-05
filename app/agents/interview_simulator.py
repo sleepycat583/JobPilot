@@ -168,16 +168,20 @@ def build_interview_plan(
     """按 JD/匹配结果或独立目标生成受限主题计划。"""
 
     source = _plan_source(jd_parsed, match_result, user_goal)
+    language_requirement = (
+        "Write every topic and objective in Simplified Chinese. Keep established technical names such as FastAPI, Redis, and API unchanged when appropriate. "
+    )
     prompt = (
         "You are planning a mock interview. Return only JSON matching InterviewPlanOutput. "
         "Create 1..15 unique topics. Use basis=jd only for supplied JD facts, basis=match_result only for supplied match signals, "
-        "and basis=user_goal/general for independent requests. Mark core topics needed for the target interview.\n"
+        "and basis=user_goal/general for independent requests. Mark core topics needed for the target interview. "
+        f"{language_requirement}\n"
         f"Target primary question count: {target_question_count}\n{source}"
     )
     result = call_with_structured_output(
         chat_model,
         InterviewPlanOutput,
-        StructuredPromptContext(full_prompt=prompt, minimal_input=source),
+        StructuredPromptContext(full_prompt=prompt, minimal_input=f"{language_requirement}{source}"),
         "interview_plan",
     )
     if result.value is not None:
@@ -219,15 +223,19 @@ def ask_question(
         raise ValueError("interview plan must contain an allowed topic")
 
     history = [{"question_id": item.question_id, "topic": item.topic, "question": item.question} for item in state.question_records]
+    language_requirement = (
+        "Write the question in Simplified Chinese. Keep established technical names such as FastAPI, Redis, and API unchanged when appropriate. "
+    )
     prompt = (
         "You are asking the next mock interview question. Return only JSON matching QuestionProposal. "
-        "Do not repeat or paraphrase historical questions. The topic must be one of Allowed topics.\n"
+        "Do not repeat or paraphrase historical questions. The topic must be one of Allowed topics. "
+        f"{language_requirement}\n"
         f"Mode: {mode}\nAllowed topics: {allowed_topics}\nHistory: {history}\nContext updates: {state.user_context_updates}"
     )
     raw_result = call_with_structured_output(
         chat_model,
         QuestionProposal,
-        StructuredPromptContext(full_prompt=prompt, minimal_input=f"Allowed topics: {allowed_topics}; mode: {mode}"),
+        StructuredPromptContext(full_prompt=prompt, minimal_input=f"{language_requirement}Allowed topics: {allowed_topics}; mode: {mode}"),
         "ask_question",
     )
     if raw_result.value is None:
@@ -276,7 +284,8 @@ def evaluate_answer(chat_model: Any, record: QuestionRecord, *, user_goal: str =
         "If answer_relevance is on_topic, job_relevance must be at least 40. "
         "If answer_relevance is off_topic, job_relevance must be below 60. "
         "fatal_error=true requires a non-empty fatal_error_reason, at least one issue, and technical_accuracy below 60; "
-        "otherwise fatal_error must be false and fatal_error_reason must be null.\n"
+        "otherwise fatal_error must be false and fatal_error_reason must be null. "
+        "Write feedback, strengths, issues, and fatal_error_reason in Simplified Chinese. Keep established technical names unchanged when appropriate.\n"
     )
     prompt = (
         "You are evaluating one mock interview answer. Judge only the provided question, answer, and target; "
@@ -325,17 +334,24 @@ def generate_review_report(
     score = calculate_interview_score(state.question_records)
     metadata = build_completion_metadata(state.plan, state.question_records, completion_reason)
     allowed_ids = {record.question_id for record in state.question_records}
+    language_requirement = (
+        "Write every user-visible narrative field in Simplified Chinese. Keep established technical names unchanged when appropriate. "
+    )
     prompt = (
         "You are writing a mock interview review. Return only JSON matching InterviewReportNarrative. "
         "Use only listed question IDs. A recurring weakness must occur in at least two questions or be tied to fatal_error=true. "
-        "Each review action must include a concrete study topic, practice action, and verification.\n"
+        "Each review action must include a concrete study topic, practice action, and verification. "
+        f"{language_requirement}\n"
         f"Deterministic score: {score.dimension_scores}; overall: {score.overall_score}; metadata: {metadata}; "
         f"JD focus: {_jd_focus(jd_parsed)}; records: {_report_records(state.question_records)}"
     )
     raw_result = call_with_structured_output(
         chat_model,
         InterviewReportNarrative,
-        StructuredPromptContext(full_prompt=prompt, minimal_input=f"Question IDs: {sorted(allowed_ids)}; score: {score.overall_score}"),
+        StructuredPromptContext(
+            full_prompt=prompt,
+            minimal_input=f"{language_requirement}Question IDs: {sorted(allowed_ids)}; score: {score.overall_score}",
+        ),
         "generate_review_report",
     )
     if raw_result.value is None:

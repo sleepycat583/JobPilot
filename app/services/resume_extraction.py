@@ -18,13 +18,26 @@ from app.services.resume_storage import ResumeFileValidationError
 
 MAX_PDF_PAGES = 20
 MIN_TEXT_CHARACTERS = 40
+DEFAULT_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+DEFAULT_MAX_VISION_CALLS = MAX_PDF_PAGES
+DEFAULT_RENDER_SCALE = 1.5
 
 
 class ResumeTextExtractor:
     """提取 TXT、文本型 PDF 或扫描 PDF 的可索引文本。"""
 
-    def __init__(self, *, vision_model: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        vision_model: Any | None = None,
+        max_image_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
+        max_vision_calls: int = DEFAULT_MAX_VISION_CALLS,
+        render_scale: float = DEFAULT_RENDER_SCALE,
+    ) -> None:
         self._vision_model = vision_model
+        self._max_image_bytes = max_image_bytes
+        self._max_vision_calls = max_vision_calls
+        self._render_scale = render_scale
 
     def extract(self, storage_path: str) -> str:
         """从原始简历文件提取文本。
@@ -78,6 +91,11 @@ class ResumeTextExtractor:
             )
         try:
             document = fitz.open(path)
+            if len(document) > self._max_vision_calls:
+                raise ResumeFileValidationError(
+                    "RESUME_PDF_OCR_TOO_MANY_CALLS",
+                    "Resume PDF exceeds the configured OCR page-call limit",
+                )
             page_texts = [self._ocr_page(page, index + 1) for index, page in enumerate(document)]
         except ResumeFileValidationError:
             raise
@@ -94,12 +112,23 @@ class ResumeTextExtractor:
         return text
 
     def _ocr_page(self, page: Any, page_number: int) -> str:
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-        image_data = base64.b64encode(pixmap.tobytes("png")).decode("ascii")
-        response = self._vision_model.invoke(HumanMessage(content=[
-            {"type": "text", "text": "提取此简历页面的全部可见文字。保留标题、项目、经历和表格的阅读顺序；只返回纯文本，不要解释。"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
-        ]))
+        try:
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(self._render_scale, self._render_scale), alpha=False)
+            image_bytes = pixmap.tobytes("png")
+        except Exception as error:
+            raise ResumeFileValidationError("RESUME_PDF_PAGE_RENDER_FAILED", f"Failed to render PDF page {page_number}") from error
+        if len(image_bytes) > self._max_image_bytes:
+            raise ResumeFileValidationError(
+                "RESUME_PDF_OCR_IMAGE_TOO_LARGE", f"Rendered PDF page {page_number} exceeds the OCR image limit"
+            )
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+        try:
+            response = self._vision_model.invoke(HumanMessage(content=[
+                {"type": "text", "text": "提取此简历页面的全部可见文字。保留标题、项目、经历和表格的阅读顺序；只返回纯文本，不要解释。"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+            ]))
+        except Exception as error:
+            raise ResumeFileValidationError("RESUME_PDF_OCR_FAILED", f"OCR request failed for page {page_number}") from error
         content = getattr(response, "content", "")
         if not isinstance(content, str) or not content.strip():
             raise ResumeFileValidationError("RESUME_PDF_OCR_FAILED", f"OCR returned no text for page {page_number}")

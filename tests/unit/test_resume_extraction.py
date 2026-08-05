@@ -22,6 +22,13 @@ class FakeVisionModel:
         return type("VisionResponse", (), {"content": f"扫描页 {self.calls} 的简历内容"})()
 
 
+class FailingVisionModel:
+    """模拟外部视觉服务异常，验证 Provider 异常不会泄漏到索引层。"""
+
+    def invoke(self, _message):
+        raise TimeoutError("vision request timed out")
+
+
 def _write_pdf(path: Path, pages: list[str | None]) -> None:
     """生成含文本层或纯白页的最小 PDF 测试夹具。"""
 
@@ -66,3 +73,34 @@ def test_uses_vision_model_for_scanned_pdf_and_preserves_page_order(tmp_path: Pa
 
     assert text == "[第 1 页]\n扫描页 1 的简历内容\n\n[第 2 页]\n扫描页 2 的简历内容"
     assert vision_model.calls == 2
+
+
+def test_maps_vision_model_exception_to_stable_error(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "scanned-resume.pdf"
+    _write_pdf(pdf_path, [None])
+
+    with pytest.raises(ResumeFileValidationError) as error:
+        ResumeTextExtractor(vision_model=FailingVisionModel()).extract(str(pdf_path))
+
+    assert error.value.code == "RESUME_PDF_OCR_FAILED"
+    assert "page 1" in str(error.value)
+
+
+def test_rejects_pdf_when_ocr_call_budget_is_exceeded(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "scanned-resume.pdf"
+    _write_pdf(pdf_path, [None, None])
+
+    with pytest.raises(ResumeFileValidationError) as error:
+        ResumeTextExtractor(vision_model=FakeVisionModel(), max_vision_calls=1).extract(str(pdf_path))
+
+    assert error.value.code == "RESUME_PDF_OCR_TOO_MANY_CALLS"
+
+
+def test_rejects_rendered_page_when_image_budget_is_exceeded(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "scanned-resume.pdf"
+    _write_pdf(pdf_path, [None])
+
+    with pytest.raises(ResumeFileValidationError) as error:
+        ResumeTextExtractor(vision_model=FakeVisionModel(), max_image_bytes=1).extract(str(pdf_path))
+
+    assert error.value.code == "RESUME_PDF_OCR_IMAGE_TOO_LARGE"

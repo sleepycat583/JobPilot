@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     vision_model_name: str = "qwen3-vl-flash"
     vision_base_url: str = ""
     vision_api_key: str = ""
+    vision_timeout_seconds: int = 60
+    vision_max_image_bytes: int = 4 * 1024 * 1024
+    vision_max_calls: int = 20
+    vision_render_scale: float = 1.5
     chroma_persist_dir: str
     sqlalchemy_database_url: str = "sqlite:///./data/app.sqlite3"
     langgraph_checkpoint_path: str = "./data/checkpoints.sqlite3"
@@ -62,6 +66,24 @@ class Settings(BaseSettings):
         if not normalized:
             raise ValueError("must not be blank")
         return normalized
+
+    @field_validator("vision_timeout_seconds", "vision_max_image_bytes", "vision_max_calls")
+    @classmethod
+    def validate_positive_integer(cls, value: int) -> int:
+        """拒绝会导致视觉 OCR 无法运行或失去费用保护的非正数配置。"""
+
+        if value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("vision_render_scale")
+    @classmethod
+    def validate_render_scale(cls, value: float) -> float:
+        """限制 PDF 渲染倍率，避免错误配置造成异常大的请求图片。"""
+
+        if value <= 0 or value > 4:
+            raise ValueError("must be greater than zero and no greater than 4")
+        return value
 
 
 def load_settings(**overrides: Any) -> Settings:

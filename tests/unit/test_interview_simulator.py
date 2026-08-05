@@ -105,6 +105,7 @@ def test_plan_uses_jd_and_match_inputs_in_prompt() -> None:
     assert "Redis" in model.prompts[0]
     assert "设计高并发 API" in model.prompts[0]
     assert "缺少 Redis 性能优化案例" in model.prompts[0]
+    assert "Simplified Chinese" in model.prompts[0]
 
 
 @pytest.mark.core_agent_tests
@@ -116,6 +117,18 @@ def test_plan_supports_independent_request_without_jd() -> None:
     assert result.value is not None
     assert result.value.plan[0].basis == "user_goal"
     assert "Independent interview request" in model.prompts[0]
+
+
+@pytest.mark.core_agent_tests
+def test_plan_keeps_chinese_requirement_in_minimal_retry_prompt() -> None:
+    """格式修复会丢弃完整上下文，最小提示仍须保留中文计划要求。"""
+    model = FakeChatModel([{"plan": [{"topic_id": "cache"}]}, _plan_payload(basis="user_goal")])
+
+    result = build_interview_plan(model, user_goal="准备后端面试")
+
+    assert result.value is not None
+    assert result.retry_count == 1
+    assert "Simplified Chinese" in model.prompts[1]
 
 
 @pytest.mark.core_agent_tests
@@ -145,6 +158,24 @@ def test_ask_question_assigns_program_identity_and_uses_plan_topic() -> None:
     assert result.value.question_id == "q-1"
     assert result.value.follow_up_of is None
     assert result.value.scores == {}
+    assert "Write the question in Simplified Chinese" in model.prompts[0]
+
+
+@pytest.mark.core_agent_tests
+def test_ask_question_keeps_chinese_requirement_in_minimal_retry_prompt() -> None:
+    """格式修复会丢弃完整上下文，最小提示仍须保留中文出题要求。"""
+    model = FakeChatModel(
+        [
+            {"topic": "缓存"},
+            {"topic": "缓存", "question": "请说明如何处理缓存击穿。"},
+        ]
+    )
+
+    result = ask_question(model, _state())
+
+    assert result.value is not None
+    assert result.retry_count == 1
+    assert "Write the question in Simplified Chinese" in model.prompts[1]
 
 
 @pytest.mark.core_agent_tests

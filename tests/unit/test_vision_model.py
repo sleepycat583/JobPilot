@@ -42,3 +42,12 @@ def test_vision_model_prefers_dedicated_connection_overrides(monkeypatch) -> Non
 
     assert model.kwargs["base_url"] == "https://vision.example/v1"
     assert model.kwargs["api_key"] == "vision-key"
+
+
+def test_vision_model_uses_configured_timeout_and_disables_sdk_retries(monkeypatch) -> None:
+    monkeypatch.setattr(vision_model, "ChatOpenAI", FakeChatOpenAI)
+
+    model = vision_model.build_vision_model(_settings(vision_timeout_seconds=17))
+
+    assert model.kwargs["timeout"] == 17
+    assert model.kwargs["max_retries"] == 0

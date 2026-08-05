@@ -136,7 +136,12 @@ def build_dependencies(settings: Settings) -> AppDependencies:
         resume_store=resume_store,
         embedding_model=embedding_model,
         resume_storage=ResumeStorage(),
-        resume_extractor=ResumeTextExtractor(vision_model=vision_model),
+        resume_extractor=ResumeTextExtractor(
+            vision_model=vision_model,
+            max_image_bytes=settings.vision_max_image_bytes,
+            max_vision_calls=settings.vision_max_calls,
+            render_scale=settings.vision_render_scale,
+        ),
         close=_close,
     )
 

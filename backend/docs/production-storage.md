@@ -29,6 +29,8 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 首次部署需要在受控迁移步骤中创建 checkpoint 表。开发环境可以临时设置
 `AUTO_CREATE_CHECKPOINT_SCHEMA=true`，生产环境建议使用一次性管理命令或受控发布步骤，
 并保持该开关为 `false`。业务表仍由 `alembic upgrade head` 管理，二者是两套独立的 schema 生命周期。
+`/api/health/ready` 会执行一次只读 checkpoint 查询；如果表不存在或数据库不可用，服务会返回
+`CHECKPOINT_NOT_READY`，不会把未完成初始化的实例交给前端流量。
 
 ## 多实例迁移边界
 

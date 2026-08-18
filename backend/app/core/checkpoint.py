@@ -1,7 +1,5 @@
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
-from typing import Any
-
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -41,3 +39,16 @@ def initialize_checkpoint(
         if not callable(setup):
             raise RuntimeError("Configured PostgreSQL checkpoint saver does not support setup()")
         setup()
+
+
+def probe_checkpoint(checkpointer: BaseCheckpointSaver) -> None:
+    """Run a read-only checkpoint query for readiness checks.
+
+    The synthetic thread ID is never written. A missing Postgres checkpoint
+    schema or an unavailable database surfaces here before traffic reaches the
+    conversation graph.
+    """
+
+    checkpointer.get_tuple(
+        {"configurable": {"thread_id": "__career_workbench_healthcheck__", "checkpoint_ns": ""}}
+    )

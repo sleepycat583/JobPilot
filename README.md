@@ -27,7 +27,7 @@ OpenAPI：`http://127.0.0.1:8000/docs`
 健康检查：
 
 - `GET /api/health/live`：进程存活检查，不访问外部服务。
-- `GET /api/health/ready`：应用已完成 lifespan 初始化，并可访问数据库。
+- `GET /api/health/ready`：应用已完成 lifespan 初始化，并可读业务数据库和 LangGraph checkpoint。
 
 默认 `LLM_MODE=stub` 会运行完整 LangGraph 拓扑和 checkpoint，但不会假装做语义判断。配置 `LLM_MODE=openai`、`OPENAI_MODEL` 和 `OPENAI_API_KEY` 后启用真实 LLM 路由与业务任务；第三方兼容服务通过 `OPENAI_BASE_URL` 接入。LangSmith Trace 优先在本机通过 OAuth 完成认证，任何真实密钥都不得提交。
 

@@ -93,6 +93,20 @@ def test_readiness_reports_uninitialized_app(client: TestClient) -> None:
     client.app.state.graph_runtime = graph_runtime
 
 
+def test_readiness_reports_unavailable_checkpoint(client: TestClient) -> None:
+    checkpointer = client.app.state.graph_checkpointer
+
+    class BrokenCheckpoint:
+        def get_tuple(self, _config: dict[str, Any]) -> None:
+            raise RuntimeError("checkpoint unavailable")
+
+    client.app.state.graph_checkpointer = BrokenCheckpoint()
+    response = client.get("/api/health/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "CHECKPOINT_NOT_READY"
+    client.app.state.graph_checkpointer = checkpointer
+
+
 def test_resume_upload_is_async_and_idempotent(client: TestClient) -> None:
     headers = key()
     files = {"file": ("resume.pdf", b"%PDF-1.4 same", "application/pdf")}

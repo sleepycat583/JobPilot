@@ -11,6 +11,7 @@ def test_local_blob_store_round_trip(tmp_path: Path) -> None:
     store.put_bytes("resume-1.txt", b"hello", content_type="text/plain")
     with store.materialize("resume-1.txt") as path:
         assert path.read_bytes() == b"hello"
+    store.probe()
 
 
 def test_local_blob_store_rejects_path_escape(tmp_path: Path) -> None:

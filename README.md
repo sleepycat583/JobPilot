@@ -27,7 +27,7 @@ OpenAPI：`http://127.0.0.1:8000/docs`
 健康检查：
 
 - `GET /api/health/live`：进程存活检查，不访问外部服务。
-- `GET /api/health/ready`：应用已完成 lifespan 初始化，并可读业务数据库和 LangGraph checkpoint。
+- `GET /api/health/ready`：应用已完成 lifespan 初始化，并可读业务数据库、LangGraph checkpoint、文件存储和（启用时）Chroma。
 
 默认 `LLM_MODE=stub` 会运行完整 LangGraph 拓扑和 checkpoint，但不会假装做语义判断。配置 `LLM_MODE=openai`、`OPENAI_MODEL` 和 `OPENAI_API_KEY` 后启用真实 LLM 路由与业务任务；第三方兼容服务通过 `OPENAI_BASE_URL` 接入。LangSmith Trace 优先在本机通过 OAuth 完成认证，任何真实密钥都不得提交。
 
@@ -79,6 +79,11 @@ docker compose down
 ```
 
 当前 Compose 配置使用单个后端 worker 和 SQLite，以保证 SqliteSaver、后台任务和本地 Chroma 的进程内一致性。需要多实例或高并发部署时，应先把业务数据库迁移到 Postgres，并将 checkpoint、上传文件和向量库切换到共享持久化方案，再增加 worker 数量。
+
+多实例模板位于 `docker-compose.multi-instance.yml`，依赖外部 PostgreSQL、S3/MinIO 和 Chroma。
+先在单个受控迁移任务中执行 `docker compose -f docker-compose.multi-instance.yml --profile ops run --rm migrate`，
+再执行 `docker compose -f docker-compose.multi-instance.yml up --build` 启动两个后端实例和前端负载均衡。
+默认单实例 Compose 仍设置 `RUN_MIGRATIONS=true`；多实例 API 容器固定为 `false`，避免并发迁移。
 
 Checkpoint 也支持显式切换到 PostgreSQL：设置 `CHECKPOINT_BACKEND=postgres` 和
 `GRAPH_CHECKPOINT_DATABASE_URL`。配置错误不会回退到 SQLite；首次建表由

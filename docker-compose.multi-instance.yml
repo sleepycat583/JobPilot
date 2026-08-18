@@ -1,0 +1,69 @@
+services:
+  migrate:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment: &shared_backend_environment
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      CHECKPOINT_BACKEND: postgres
+      GRAPH_CHECKPOINT_DATABASE_URL: ${GRAPH_CHECKPOINT_DATABASE_URL}
+      AUTO_CREATE_SCHEMA: "false"
+      AUTO_CREATE_CHECKPOINT_SCHEMA: "false"
+      UPLOAD_STORAGE_BACKEND: s3
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET}
+      OBJECT_STORAGE_ENDPOINT_URL: ${OBJECT_STORAGE_ENDPOINT_URL}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-auto}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY}
+      OBJECT_STORAGE_PREFIX: ${OBJECT_STORAGE_PREFIX:-career-agent}
+      CHROMA_BACKEND: http
+      CHROMA_HOST: ${CHROMA_HOST}
+      CHROMA_PORT: ${CHROMA_PORT:-8000}
+      CHROMA_SSL: ${CHROMA_SSL:-false}
+      CHROMA_API_KEY: ${CHROMA_API_KEY}
+      FRONTEND_ORIGIN: http://127.0.0.1:8080
+    command: ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python scripts/check_postgres_checkpoint.py --setup && .venv/bin/python scripts/check_postgres_database.py"]
+    profiles: ["ops"]
+
+  backend-a:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      <<: *shared_backend_environment
+      RUN_MIGRATIONS: "false"
+    expose:
+      - "8000"
+    healthcheck: &backend_healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  backend-b:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      <<: *shared_backend_environment
+      RUN_MIGRATIONS: "false"
+    expose:
+      - "8000"
+    healthcheck: *backend_healthcheck
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.multi
+    depends_on:
+      backend-a:
+        condition: service_healthy
+      backend-b:
+        condition: service_healthy
+    ports:
+      - "8080:80"

@@ -31,4 +31,11 @@ def ready(request: Request) -> dict[str, str]:
         probe_checkpoint(request.app.state.graph_checkpointer)
     except Exception as exc:
         raise api_error(503, "CHECKPOINT_NOT_READY", "工作流状态存储暂时不可用。", retryable=True) from exc
+    try:
+        request.app.state.blob_store.probe()
+        vector_store = getattr(request.app.state, "vector_store", None)
+        if vector_store is not None:
+            vector_store.probe()
+    except Exception as exc:
+        raise api_error(503, "SHARED_STORAGE_NOT_READY", "文件或向量存储暂时不可用。", retryable=True) from exc
     return {"status": "ready"}

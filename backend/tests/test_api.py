@@ -107,6 +107,20 @@ def test_readiness_reports_unavailable_checkpoint(client: TestClient) -> None:
     client.app.state.graph_checkpointer = checkpointer
 
 
+def test_readiness_reports_unavailable_shared_storage(client: TestClient) -> None:
+    blob_store = client.app.state.blob_store
+
+    class BrokenBlobStore:
+        def probe(self) -> None:
+            raise RuntimeError("storage unavailable")
+
+    client.app.state.blob_store = BrokenBlobStore()
+    response = client.get("/api/health/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SHARED_STORAGE_NOT_READY"
+    client.app.state.blob_store = blob_store
+
+
 def test_resume_upload_is_async_and_idempotent(client: TestClient) -> None:
     headers = key()
     files = {"file": ("resume.pdf", b"%PDF-1.4 same", "application/pdf")}

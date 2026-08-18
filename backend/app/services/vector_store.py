@@ -122,6 +122,11 @@ class VectorStore:
         self._embedding = AlibabaEmbeddingProvider(settings)
         self._lock = threading.RLock()
 
+    def probe(self) -> None:
+        """Verify that the configured Chroma client can reach its database."""
+
+        self._client.heartbeat()
+
     def index_resume(self, resume_id: str, file_sha256: str, chunks: list[str]) -> int:
         if not chunks:
             raise ValueError("Resume has no indexable text")

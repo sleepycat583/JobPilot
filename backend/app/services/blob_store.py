@@ -13,6 +13,8 @@ class BlobStore(Protocol):
 
     def materialize(self, key: str) -> Iterator[Path]: ...
 
+    def probe(self) -> None: ...
+
 
 class LocalBlobStore:
     def __init__(self, root: Path) -> None:
@@ -30,6 +32,10 @@ class LocalBlobStore:
         path = self._safe_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+
+    def probe(self) -> None:
+        if not self.root.is_dir():
+            raise RuntimeError("Local blob storage directory is unavailable")
 
     @contextmanager
     def materialize(self, key: str) -> Iterator[Path]:
@@ -76,6 +82,9 @@ class S3BlobStore:
             Body=content,
             ContentType=content_type or "application/octet-stream",
         )
+
+    def probe(self) -> None:
+        self._client.head_bucket(Bucket=self.bucket)
 
     @contextmanager
     def materialize(self, key: str) -> Iterator[Path]:

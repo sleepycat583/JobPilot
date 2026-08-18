@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from app.core.config import Settings
 from app.db import Base, build_engine, build_session_factory
@@ -71,5 +73,25 @@ def test_running_progress_renews_owned_lease(tmp_path: Path) -> None:
             update_job(session, job, status="running", progress=50, lease_owner="worker-a", lease_seconds=900)
             session.refresh(job)
             assert job.lease_expires_at is not None and job.lease_expires_at > before
+    finally:
+        engine.dispose()
+
+
+def test_concurrent_claim_has_exactly_one_winner(tmp_path: Path) -> None:
+    engine, session_factory = _factory(tmp_path)
+    try:
+        with session_factory() as session:
+            session.add(JobRecord(id="job-race", kind="resume_parse", status="queued", progress=0))
+            session.commit()
+        barrier = Barrier(2)
+
+        def attempt(owner: str) -> bool:
+            with session_factory() as session:
+                barrier.wait()
+                return claim_job(session, "job-race", owner, 900)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(attempt, ["worker-a", "worker-b"]))
+        assert sorted(outcomes) == [False, True]
     finally:
         engine.dispose()

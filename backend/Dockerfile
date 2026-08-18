@@ -20,4 +20,4 @@ RUN mkdir -p /app/data/uploads /app/data/chroma
 
 EXPOSE 8000
 
-CMD ["sh", "-c", ".venv/bin/alembic upgrade head && exec .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"]
+CMD ["sh", "-c", "if [ \"${RUN_MIGRATIONS:-false}\" = \"true\" ]; then .venv/bin/alembic upgrade head; fi; exec .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"]

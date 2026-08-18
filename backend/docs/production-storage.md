@@ -31,6 +31,8 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 并保持该开关为 `false`。业务表仍由 `alembic upgrade head` 管理，二者是两套独立的 schema 生命周期。
 `/api/health/ready` 会执行一次只读 checkpoint 查询；如果表不存在或数据库不可用，服务会返回
 `CHECKPOINT_NOT_READY`，不会把未完成初始化的实例交给前端流量。
+文件对象存储或远程 Chroma 不可用时，readiness 会返回 `SHARED_STORAGE_NOT_READY`，避免实例
+在依赖未就绪时接收上传和匹配请求。
 
 ## 多实例迁移边界
 
@@ -73,3 +75,16 @@ uv run python scripts/check_postgres_checkpoint.py --setup
 ```
 
 命令只输出成功/失败摘要，不输出数据库连接串；它会验证 checkpoint 的 schema、写入和读取。
+
+## 多实例 Compose 验证
+
+`docker-compose.multi-instance.yml` 提供两个 API 实例和 SSE 友好的 Nginx upstream。它不携带
+数据库、对象存储或 Chroma 的默认密码，所有连接与凭据都必须由本地环境变量提供。部署顺序如下：
+
+1. 配置共享 PostgreSQL、S3/MinIO、Chroma 的环境变量。
+2. 运行 `docker compose -f docker-compose.multi-instance.yml --profile ops run --rm migrate`。
+3. 运行 `docker compose -f docker-compose.multi-instance.yml up --build`。
+4. 验证两个后端 healthcheck、SSE 重连、同一 Idempotency-Key 重试和实例重启后的任务租约接管。
+
+每个 API 容器均设置 `RUN_MIGRATIONS=false`；Alembic 与 checkpoint setup 只能由一次性 `migrate`
+任务执行，避免横向扩容时并发修改 schema。

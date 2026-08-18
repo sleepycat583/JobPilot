@@ -110,6 +110,24 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1\d{10}(?!\d)")
+INTERVIEW_DIMENSIONS = ("技术深度", "证据充分度", "岗位匹配度", "表达清晰度")
+INTERVIEW_DIMENSION_ALIASES = {
+    "technical_depth": "技术深度",
+    "技术深度": "技术深度",
+    "技术能力": "技术深度",
+    "evidence_specificity": "证据充分度",
+    "evidence_quality": "证据充分度",
+    "证据充分度": "证据充分度",
+    "证据质量": "证据充分度",
+    "jd_alignment": "岗位匹配度",
+    "job_alignment": "岗位匹配度",
+    "岗位匹配度": "岗位匹配度",
+    "岗位针对性": "岗位匹配度",
+    "communication_clarity": "表达清晰度",
+    "communication": "表达清晰度",
+    "表达清晰度": "表达清晰度",
+    "表达结构": "表达清晰度",
+}
 
 
 def privacy_filter_text(text: str) -> str:
@@ -199,8 +217,21 @@ low_score_review_required 仅当 total_score < 60 时为 true。""",
         )
 
     def report(self, interview_type: str, records: list[dict[str, Any]], resume: dict[str, Any], jd: dict[str, Any]) -> InterviewReport:
-        return self._structured(
+        result = self._structured(
             InterviewReport,
-            "你是模拟面试复盘 Worker。综合已有问答和岗位要求，给出客观分数、总结和优先行动项。",
+            """你是模拟面试复盘 Worker。综合已有问答和岗位要求，给出客观分数、简洁总结和优先行动项。
+所有面向用户的文本必须使用简体中文。summary 最多两句、160 个字符以内；actions 最多 4 条。
+dimension_scores 必须且只能包含：技术深度、证据充分度、岗位匹配度、表达清晰度；每项范围为 0-100。""",
             f"面试类型：{interview_type}\n问答记录：{records}\n简历：{resume}\nJD：{jd}",
         )
+        dimensions: dict[str, float] = {}
+        for name, score in result.dimension_scores.items():
+            normalized_name = INTERVIEW_DIMENSION_ALIASES.get(
+                str(name).strip().casefold().replace("-", "_").replace(" ", "_")
+            )
+            if normalized_name is not None:
+                dimensions[normalized_name] = round(min(max(float(score), 0.0), 100.0), 1)
+        result.dimension_scores = {name: dimensions.get(name, 0.0) for name in INTERVIEW_DIMENSIONS}
+        result.summary = " ".join(result.summary.split())[:160]
+        result.actions = [" ".join(str(action).split())[:180] for action in result.actions if str(action).strip()][:4]
+        return result

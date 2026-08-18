@@ -121,6 +121,19 @@ class VectorStore:
         )
         self._embedding = AlibabaEmbeddingProvider(settings)
         self._lock = threading.RLock()
+        self._closed = False
+
+    def close(self) -> None:
+        """Release Chroma's local SQLite/client resources during app shutdown."""
+
+        with self._lock:
+            if self._closed:
+                return
+            system = getattr(self._client, "_system", None)
+            stop = getattr(system, "stop", None)
+            if callable(stop):
+                stop()
+            self._closed = True
 
     def probe(self) -> None:
         """Verify that the configured Chroma client can reach its database."""

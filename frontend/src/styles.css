@@ -1901,6 +1901,8 @@ input:focus-visible {
 
 .report-header h2 { margin: 6px 0 0; font-size: 20px; }
 .report-header p { margin: 7px 0 0; color: var(--text-soft); font-size: 10px; }
+.report-header .report-summary { display: -webkit-box; max-width: 72ch; overflow: hidden; font-size: 13px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.report-header .report-meta { color: var(--text-faint); }
 .report-score { white-space: nowrap; }
 .report-score strong { color: var(--accent-strong); font-size: 34px; }
 .report-score span { color: var(--text-faint); font-size: 10px; }

@@ -31,6 +31,15 @@ OpenAPI：`http://127.0.0.1:8000/docs`
 
 默认 `LLM_MODE=stub` 会运行完整 LangGraph 拓扑和 checkpoint，但不会假装做语义判断。配置 `LLM_MODE=openai`、`OPENAI_MODEL` 和 `OPENAI_API_KEY` 后启用真实 LLM 路由与业务任务；第三方兼容服务通过 `OPENAI_BASE_URL` 接入。LangSmith Trace 优先在本机通过 OAuth 完成认证，任何真实密钥都不得提交。
 
+完成本地模型认证后，可运行隔离的真实业务链路验收。该命令使用临时 SQLite、上传目录、checkpoint 和 Chroma，不会写入默认工作区数据：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -u .\scripts\evaluate_business_flows.py
+```
+
+它覆盖简历解析和索引、JD 解析、聊天 SSE 脱敏、匹配证据以及面试题目/反馈/复盘；命令只输出阶段名称和汇总状态。
+
 上传的 PDF、DOCX 和 TXT 会在后台提取文本、清理联系方式、生成结构化简历，并通过阿里云原生 Embedding 接口写入 ChromaDB。结构化结果落库后的中间状态为 `parsed`，向量索引成功后为 `indexed`；匹配分析只使用该简历检索出的证据片段。ChromaDB 精确锁定为 `1.5.9`，匿名遥测已关闭。单实例默认使用本地文件；多实例可将 `UPLOAD_STORAGE_BACKEND` 切换为 `s3`，使用 S3/MinIO 共享对象存储。
 
 对话工作台已经接入真实业务动作：用户可以直接粘贴新 JD、要求执行当前简历与 JD 的匹配分析，或在聊天中开始模拟面试、提交回答、查看逐题反馈并继续下一题。Supervisor 仍然只负责语义路由；是否执行动作由被选中的 Worker 通过结构化输出决定，API 层不做关键词判断。

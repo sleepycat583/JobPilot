@@ -1,6 +1,6 @@
 from app.graph.models import StubSupervisorModel
 from app.services.documents import make_text_chunks
-from app.services.llm_tasks import LLMTaskService, StructuredMatch, privacy_filter_text
+from app.services.llm_tasks import InterviewReport, LLMTaskService, StructuredMatch, privacy_filter_text
 
 
 def test_privacy_filter_removes_email_and_mainland_phone() -> None:
@@ -47,3 +47,32 @@ def test_match_score_is_derived_from_bounded_dimensions(monkeypatch) -> None:
     }
     assert result.total_score == 76.0
     assert result.low_score_review_required is False
+
+
+def test_interview_report_is_normalized_for_chinese_ui(monkeypatch) -> None:
+    service = LLMTaskService(StubSupervisorModel())
+    raw = InterviewReport(
+        overall_score=68,
+        summary="总结 " * 100,
+        dimension_scores={
+            "technical_depth": 55,
+            "evidence_specificity": 120,
+            "jd_alignment": 70,
+            "communication_clarity": -3,
+            "unexpected": 90,
+        },
+        actions=["行动一 " * 100, "行动二"],
+    )
+    monkeypatch.setattr(service, "_structured", lambda *_args, **_kwargs: raw)
+
+    result = service.report("综合面试", [], {}, {})
+
+    assert result.dimension_scores == {
+        "技术深度": 55.0,
+        "证据充分度": 100.0,
+        "岗位匹配度": 70.0,
+        "表达清晰度": 0.0,
+    }
+    assert len(result.summary) == 160
+    assert len(result.actions[0]) == 180
+    assert len(result.actions) == 2

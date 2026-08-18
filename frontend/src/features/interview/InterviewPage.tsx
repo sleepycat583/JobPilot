@@ -70,7 +70,17 @@ function InterviewOutline({ interview }: { interview: InterviewState }) {
   return <aside className="interview-outline"><span className="section-label">面试提纲</span>{topics.map((topic, index) => <div key={topic} className={index === interview.current_index ? 'active' : index < interview.current_index ? 'done' : ''}>{index < interview.current_index ? <CheckCircle2 size={16} /> : index === interview.current_index ? <LoaderCircle size={16} /> : <Circle size={16} />}<span>{topic}</span></div>)}</aside>
 }
 
+const reportDimensionLabels: Record<string, string> = {
+  technical_depth: '技术深度',
+  evidence_specificity: '证据充分度',
+  evidence_quality: '证据充分度',
+  jd_alignment: '岗位匹配度',
+  job_alignment: '岗位匹配度',
+  communication_clarity: '表达清晰度',
+  communication: '表达清晰度',
+}
+
 function InterviewReport({ interview, onRestart }: { interview: InterviewState; onRestart: () => void }) {
   const report = interview.report!
-  return <div className="page-view report-view"><div className="report-header"><div><span className="eyebrow">模拟面试复盘</span><h2>{report.summary}</h2><p>完成 {interview.records.length} 道问题 · {interview.interview_type}</p></div><div className="report-score"><strong>{report.overall_score}</strong><span>/ 100</span></div></div><div className="report-grid"><section><SectionTitle title="维度表现" meta={`${Object.keys(report.dimension_scores).length} 项`} />{Object.entries(report.dimension_scores).map(([name, score]) => <div className="dimension compact" key={name}><div><strong>{name}</strong><span>{score}</span></div><div className="progress-track"><span style={{ width: `${score}%` }} /></div></div>)}</section><section><SectionTitle title="优先改进" meta="行动项" />{report.actions.map((action) => <div className="action-item" key={action}><strong>{action}</strong><p>根据本轮回答补充可验证的项目证据与技术判断。</p></div>)}</section></div><div className="report-actions"><button className="secondary-button" type="button" onClick={onRestart}><RefreshCw size={16} />再练一轮</button><button className="primary-button" type="button"><FileText size={16} />保存复盘</button></div></div>
+  return <div className="page-view report-view"><div className="report-header"><div><span className="eyebrow">模拟面试复盘</span><h2>本轮面试复盘</h2><p className="report-summary">{report.summary || '复盘已生成，请结合具体问题回看自己的回答。'}</p><p className="report-meta">完成 {interview.records.length} 道问题 · {interview.interview_type}</p></div><div className="report-score"><strong>{report.overall_score}</strong><span>/ 100</span></div></div><div className="report-grid"><section><SectionTitle title="维度表现" meta={`${Object.keys(report.dimension_scores).length} 项`} />{Object.entries(report.dimension_scores).map(([name, score]) => <div className="dimension compact" key={name}><div><strong>{reportDimensionLabels[name] ?? name}</strong><span>{score}</span></div><div className="progress-track"><span style={{ width: `${score}%` }} /></div></div>)}</section><section><SectionTitle title="优先改进" meta="行动项" />{report.actions.map((action) => <div className="action-item" key={action}><strong>{action}</strong><p>根据本轮回答补充可验证的项目证据与技术判断。</p></div>)}</section></div><div className="report-actions"><button className="secondary-button" type="button" onClick={onRestart}><RefreshCw size={16} />再练一轮</button><button className="primary-button" type="button"><FileText size={16} />保存复盘</button></div></div>
 }

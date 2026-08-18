@@ -28,6 +28,8 @@ def test_chroma_index_is_idempotent_and_telemetry_is_disabled(tmp_path: Path) ->
     rows = store._collection.get(where={"resume_id": "resume-1"})
     assert sorted(rows["ids"]) == ["resume:resume-1:chunk:0", "resume:resume-1:chunk:1"]
     assert store.query_resume("Redis", "resume-1", 2)
+    store.close()
+    store.close()
 
 
 def test_embedding_dimension_is_rejected() -> None:

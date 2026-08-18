@@ -60,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.graph_runtime.shutdown()
         if hasattr(app.state, "runtime"):
             await app.state.runtime.shutdown()
+        if hasattr(app.state, "vector_store") and app.state.vector_store is not None:
+            app.state.vector_store.close()
         checkpoint_manager.__exit__(None, None, None)
         engine.dispose()
 

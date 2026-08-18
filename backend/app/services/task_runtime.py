@@ -249,14 +249,14 @@ class TaskRuntime:
             await self._process_real_match(thread_id, run_id, strict, emit_terminal_event=emit_terminal_event)
             return
         with self.session_factory() as session:
-            thread = session.get(ThreadRecord, thread_id)
+            thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
             if thread is None:
                 return
             append_event(session, stream_type="thread", stream_id=thread_id, event_type="node_started", data={"run_id": run_id, "label": "正在检索简历证据"})
         await self._pause()
 
         with self.session_factory() as session:
-            thread = session.get(ThreadRecord, thread_id)
+            thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
             if thread is None:
                 return
             state = load_thread_state(thread)
@@ -446,7 +446,7 @@ class TaskRuntime:
     def start_interview(self, thread_id: str, options: dict[str, Any], *, run_id: str | None = None) -> str:
         run_id = run_id or str(uuid4())
         with self.session_factory() as session:
-            thread = session.get(ThreadRecord, thread_id)
+            thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
             if thread is None:
                 raise LookupError("Thread not found")
             state = load_thread_state(thread)
@@ -494,7 +494,7 @@ class TaskRuntime:
 
     def resume_interrupt(self, thread_id: str, interrupt_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session_factory() as session:
-            thread = session.get(ThreadRecord, thread_id)
+            thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
             if thread is None:
                 raise LookupError("Thread not found")
             state = load_thread_state(thread)

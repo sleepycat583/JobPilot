@@ -5,6 +5,7 @@ import asyncio
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import JDRecord, JobRecord, ResumeRecord, ThreadRecord
@@ -70,7 +71,7 @@ class ConversationActionService:
 
     def _existing_action(self, thread_id: str, run_id: str, action: str) -> dict[str, Any] | None:
         with self.session_factory() as session:
-            thread = session.get(ThreadRecord, thread_id)
+            thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
             if thread is None:
                 raise LookupError("Thread not found")
             state = load_thread_state(thread)

@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
@@ -17,6 +18,13 @@ router = APIRouter(prefix="/threads", tags=["threads"])
 
 def _thread_or_404(session: Session, thread_id: str) -> ThreadRecord:
     thread = session.get(ThreadRecord, thread_id)
+    if thread is None:
+        raise api_error(404, "THREAD_NOT_FOUND", "会话不存在。")
+    return thread
+
+
+def _locked_thread_or_404(session: Session, thread_id: str) -> ThreadRecord:
+    thread = session.scalar(select(ThreadRecord).where(ThreadRecord.id == thread_id).with_for_update())
     if thread is None:
         raise api_error(404, "THREAD_NOT_FOUND", "会话不存在。")
     return thread
@@ -59,7 +67,7 @@ async def create_message(
     idempotency_key: str = Depends(require_idempotency_key),
     session: Session = Depends(get_db),
 ) -> RunAccepted:
-    thread = _thread_or_404(session, thread_id)
+    thread = _locked_thread_or_404(session, thread_id)
     request_hash = hash_request(payload.model_dump_json().encode())
     cached = cached_body(session, scope=f"thread:{thread_id}:message", key=idempotency_key, request_hash=request_hash)
     if cached:

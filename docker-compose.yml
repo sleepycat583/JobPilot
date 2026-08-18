@@ -8,11 +8,20 @@ services:
       APP_ENV: production
       DATABASE_URL: sqlite:////app/data/app.db
       UPLOAD_DIR: /app/data/uploads
+      UPLOAD_STORAGE_BACKEND: local
+      OBJECT_STORAGE_BUCKET: ""
+      OBJECT_STORAGE_ENDPOINT_URL: ""
+      OBJECT_STORAGE_REGION: auto
+      OBJECT_STORAGE_PREFIX: career-agent
       GRAPH_CHECKPOINT_PATH: /app/data/langgraph.db
       CHECKPOINT_BACKEND: sqlite
       GRAPH_CHECKPOINT_DATABASE_URL: ""
       AUTO_CREATE_CHECKPOINT_SCHEMA: "false"
       CHROMA_PERSIST_DIRECTORY: /app/data/chroma
+      CHROMA_BACKEND: local
+      CHROMA_HOST: ""
+      CHROMA_PORT: "8000"
+      CHROMA_SSL: "false"
       FRONTEND_ORIGIN: http://127.0.0.1:8080
       AUTO_CREATE_SCHEMA: "false"
     volumes:

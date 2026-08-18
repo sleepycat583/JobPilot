@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     database_url: str = f"sqlite:///{(BACKEND_DIR / 'data' / 'app.db').as_posix()}"
     upload_dir: Path = BACKEND_DIR / "data" / "uploads"
+    upload_storage_backend: Literal["local", "s3"] = "local"
+    object_storage_bucket: str | None = None
+    object_storage_endpoint_url: str | None = None
+    object_storage_region: str = "auto"
+    object_storage_access_key_id: SecretStr | None = None
+    object_storage_secret_access_key: SecretStr | None = None
+    object_storage_prefix: str = "career-agent"
     frontend_origin: str = "http://127.0.0.1:5173"
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
     mock_task_delay_seconds: float = Field(default=0.15, ge=0.01, le=3.0)
@@ -25,6 +32,11 @@ class Settings(BaseSettings):
     graph_checkpoint_database_url: str | None = None
     auto_create_checkpoint_schema: bool = False
     chroma_persist_directory: Path = BACKEND_DIR / "data" / "chroma"
+    chroma_backend: Literal["local", "http"] = "local"
+    chroma_host: str | None = None
+    chroma_port: int = Field(default=8000, ge=1, le=65535)
+    chroma_ssl: bool = False
+    chroma_api_key: SecretStr | None = None
     chroma_collection_name: str = "career_resume_chunks"
     embedding_model: str = "text-embedding-v4"
     embedding_dimension: int = Field(default=1024, ge=1, le=8192)

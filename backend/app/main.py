@@ -20,6 +20,7 @@ from app.core.checkpoint import initialize_checkpoint, open_checkpoint
 from app.core.config import configure_langsmith, get_settings
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
+from app.services.blob_store import build_blob_store
 from app.services.task_runtime import TaskRuntime
 from app.services.vector_store import VectorStore
 
@@ -28,11 +29,12 @@ from app.services.vector_store import VectorStore
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_langsmith(settings)
-    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    app_blob_store = build_blob_store(settings)
     engine = build_engine(settings)
     if settings.auto_create_schema:
         Base.metadata.create_all(engine)
     app.state.settings = settings
+    app.state.blob_store = app_blob_store
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
     checkpoint_manager = open_checkpoint(settings)
@@ -41,7 +43,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         initialize_checkpoint(app.state.graph_checkpointer, settings)
         models = build_model_bundle(settings)
         app.state.vector_store = VectorStore(settings) if settings.llm_mode == "openai" else None
-        app.state.runtime = TaskRuntime(app.state.session_factory, settings, models.worker_model, app.state.vector_store)
+        app.state.runtime = TaskRuntime(
+            app.state.session_factory,
+            settings,
+            models.worker_model,
+            app.state.vector_store,
+            app.state.blob_store,
+        )
         app.state.career_graph = build_career_graph(models, app.state.graph_checkpointer)
         app.state.graph_runtime = LangGraphRuntime(app.state.career_graph, app.state.session_factory, app.state.runtime)
         await app.state.runtime.recover_pending_jobs()

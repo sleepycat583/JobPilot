@@ -37,8 +37,8 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 切换 checkpoint 后端并不自动解决其他本地状态：
 
 1. `DATABASE_URL` 需要迁移到 Postgres，并在所有实例使用同一数据库。
-2. `UPLOAD_DIR` 需要对象存储或共享文件系统，不能依赖容器本地磁盘。
-3. `CHROMA_PERSIST_DIRECTORY` 需要共享 Chroma 服务或集中式向量库；多个进程不能各自使用独立本地 collection。
+2. `UPLOAD_STORAGE_BACKEND=s3` 时，`OBJECT_STORAGE_BUCKET`、endpoint 和凭据必须通过环境变量提供；多实例不能依赖容器本地磁盘。S3/MinIO 对象 key 会持久化到任务 payload，Worker 在处理时临时下载并在完成后清理。
+3. `CHROMA_BACKEND=http` 时设置共享 Chroma 服务的 `CHROMA_HOST`、`CHROMA_PORT` 和 `CHROMA_SSL`；多个进程不能各自使用独立本地 collection。`CHROMA_API_KEY` 只通过环境变量注入。
 4. 后台任务与 SSE 事件需要共享任务/事件存储，并重新验证 worker 并发和恢复语义。
 5. 完成上述迁移并通过回归后，才可以把 Uvicorn worker 数量从 1 调高。
 

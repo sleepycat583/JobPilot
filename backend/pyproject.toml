@@ -5,6 +5,7 @@ description = "LangGraph Supervisor-Worker backend for the AI career workspace"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "alembic>=1.16,<2",
+  "boto3>=1.35,<2",
   "chromadb==1.5.9",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",

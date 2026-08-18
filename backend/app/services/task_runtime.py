@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.models import JDRecord, JobRecord, ResumeRecord, ThreadRecord
+from app.services.blob_store import BlobStore, build_blob_store
 from app.services.documents import DocumentExtractionError, extract_document_text, make_text_chunks
 from app.services.llm_tasks import LLMTaskService, normalize_source_text
 from app.services.store import append_event, load_thread_state, loads, save_thread_state, update_job, utc_iso
@@ -34,11 +35,13 @@ class TaskRuntime:
         settings: Settings,
         worker_model: BaseChatModel | None = None,
         vector_store: VectorStore | None = None,
+        blob_store: BlobStore | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
         self.task_service = LLMTaskService(worker_model) if worker_model is not None else None
         self.vector_store = vector_store
+        self.blob_store = blob_store or build_blob_store(settings)
         self.tasks: set[asyncio.Task[None]] = set()
 
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
@@ -84,7 +87,7 @@ class TaskRuntime:
             existing_structured = loads(resume.structured_json, {}) if resume.structured_json else None
             existing_status = resume.status
             file_sha256 = resume.file_sha256
-            upload_path = payload.get("upload_path")
+            upload_ref = payload.get("upload_key") or payload.get("upload_path")
 
         # A completed index is idempotent. If Chroma was cleared, the persisted
         # structured result is still reusable and the index is rebuilt below.
@@ -113,16 +116,19 @@ class TaskRuntime:
             }
         else:
             try:
-                source_text = await asyncio.to_thread(extract_document_text, Path(str(upload_path)))
-                chunks = await asyncio.to_thread(make_text_chunks, normalize_source_text(source_text))
-                if structured is None:
-                    with self.session_factory() as session:
-                        job = session.get(JobRecord, job_id)
-                        if job is not None:
-                            update_job(session, job, status="running", progress=55)
-                    structured = (
-                        await asyncio.to_thread(self.task_service.parse_resume, source_text, chunk_count=len(chunks))
-                    ).model_dump(mode="json")
+                if not upload_ref:
+                    raise FileNotFoundError("resume upload reference is missing")
+                with self.blob_store.materialize(str(upload_ref)) as upload_path:
+                    source_text = await asyncio.to_thread(extract_document_text, upload_path)
+                    chunks = await asyncio.to_thread(make_text_chunks, normalize_source_text(source_text))
+                    if structured is None:
+                        with self.session_factory() as session:
+                            job = session.get(JobRecord, job_id)
+                            if job is not None:
+                                update_job(session, job, status="running", progress=55)
+                        structured = (
+                            await asyncio.to_thread(self.task_service.parse_resume, source_text, chunk_count=len(chunks))
+                        ).model_dump(mode="json")
             except DocumentExtractionError as exc:
                 with self.session_factory() as session:
                     job = session.get(JobRecord, job_id)

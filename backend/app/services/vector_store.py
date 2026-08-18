@@ -94,11 +94,27 @@ class VectorStore:
         import chromadb
         from chromadb.config import Settings as ChromaSettings
 
-        settings.chroma_persist_directory.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(
-            path=str(settings.chroma_persist_directory),
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
+        if settings.chroma_backend == "local":
+            settings.chroma_persist_directory.mkdir(parents=True, exist_ok=True)
+            self._client = chromadb.PersistentClient(
+                path=str(settings.chroma_persist_directory),
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+        else:
+            if not settings.chroma_host:
+                raise RuntimeError("CHROMA_HOST is required when CHROMA_BACKEND=http")
+            headers = None
+            if settings.chroma_api_key is not None:
+                api_key = settings.chroma_api_key.get_secret_value().strip()
+                if api_key:
+                    headers = {"Authorization": f"Bearer {api_key}"}
+            self._client = chromadb.HttpClient(
+                host=settings.chroma_host,
+                port=settings.chroma_port,
+                ssl=settings.chroma_ssl,
+                headers=headers,
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
         self._collection = self._client.get_or_create_collection(
             name=settings.chroma_collection_name,
             metadata={"hnsw:space": "cosine"},

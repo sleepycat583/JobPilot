@@ -44,9 +44,15 @@ async def upload_resume(
 
     resume_id = str(uuid4())
     job_id = str(uuid4())
-    upload_path = request.app.state.settings.upload_dir / f"{resume_id}{suffix}"
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_bytes(content)
+    upload_key = f"{resume_id}{suffix}"
+    try:
+        request.app.state.blob_store.put_bytes(
+            upload_key,
+            content,
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except Exception as exc:
+        raise api_error(503, "UPLOAD_STORAGE_UNAVAILABLE", "文件存储暂时不可用，请稍后重试。", retryable=True) from exc
     digest = hash_request(content)
     resume = ResumeRecord(
         id=resume_id,
@@ -62,7 +68,7 @@ async def upload_resume(
         kind="resume_parse",
         status="queued",
         progress=0,
-        payload_json=dumps({"resume_id": resume_id, "upload_path": str(upload_path)}),
+        payload_json=dumps({"resume_id": resume_id, "upload_key": upload_key}),
     )
     session.add_all([resume, job])
     session.commit()

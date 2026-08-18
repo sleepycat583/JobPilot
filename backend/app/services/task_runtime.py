@@ -15,7 +15,7 @@ from app.models import JDRecord, JobRecord, ResumeRecord, ThreadRecord
 from app.services.blob_store import BlobStore, build_blob_store
 from app.services.documents import DocumentExtractionError, extract_document_text, make_text_chunks
 from app.services.llm_tasks import LLMTaskService, normalize_source_text
-from app.services.store import append_event, load_thread_state, loads, save_thread_state, update_job, utc_iso
+from app.services.store import append_event, claim_job, load_thread_state, loads, save_thread_state, update_job, utc_iso
 from app.services.vector_store import VectorIndexNotFound, VectorStore
 
 
@@ -36,12 +36,14 @@ class TaskRuntime:
         worker_model: BaseChatModel | None = None,
         vector_store: VectorStore | None = None,
         blob_store: BlobStore | None = None,
+        worker_id: str | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
         self.task_service = LLMTaskService(worker_model) if worker_model is not None else None
         self.vector_store = vector_store
         self.blob_store = blob_store or build_blob_store(settings)
+        self.worker_id = worker_id or f"worker-{uuid4()}"
         self.tasks: set[asyncio.Task[None]] = set()
 
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
@@ -68,12 +70,23 @@ class TaskRuntime:
     async def _pause(self) -> None:
         await asyncio.sleep(self.settings.mock_task_delay_seconds)
 
+    def _update_job(self, session: Session, job: JobRecord, **kwargs: Any) -> None:
+        update_job(
+            session,
+            job,
+            lease_owner=self.worker_id,
+            lease_seconds=self.settings.job_lease_seconds,
+            **kwargs,
+        )
+
     async def process_resume(self, job_id: str) -> None:
         with self.session_factory() as session:
+            if not claim_job(session, job_id, self.worker_id, self.settings.job_lease_seconds):
+                return
             job = session.get(JobRecord, job_id)
             if job is None:
                 return
-            update_job(session, job, status="running", progress=15)
+            self._update_job(session, job, status="running", progress=15)
         with self.session_factory() as session:
             job = session.get(JobRecord, job_id)
             if job is None:
@@ -81,7 +94,7 @@ class TaskRuntime:
             payload = loads(job.payload_json, {})
             resume = session.get(ResumeRecord, payload["resume_id"])
             if resume is None:
-                update_job(session, job, status="failed", progress=100, error_code="RESUME_NOT_FOUND", error_message="Resume resource is missing")
+                self._update_job(session, job, status="failed", progress=100, error_code="RESUME_NOT_FOUND", error_message="Resume resource is missing")
                 return
             resume_id = resume.id
             existing_structured = loads(resume.structured_json, {}) if resume.structured_json else None
@@ -96,7 +109,7 @@ class TaskRuntime:
                 with self.session_factory() as session:
                     job = session.get(JobRecord, job_id)
                     if job is not None:
-                        update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id})
+                        self._update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id})
                 return
 
         source_text = ""
@@ -125,7 +138,7 @@ class TaskRuntime:
                         with self.session_factory() as session:
                             job = session.get(JobRecord, job_id)
                             if job is not None:
-                                update_job(session, job, status="running", progress=55)
+                                self._update_job(session, job, status="running", progress=55)
                         structured = (
                             await asyncio.to_thread(self.task_service.parse_resume, source_text, chunk_count=len(chunks))
                         ).model_dump(mode="json")
@@ -133,13 +146,13 @@ class TaskRuntime:
                 with self.session_factory() as session:
                     job = session.get(JobRecord, job_id)
                     if job is not None:
-                        update_job(session, job, status="failed", progress=100, error_code="RESUME_EXTRACTION_FAILED", error_message=str(exc))
+                        self._update_job(session, job, status="failed", progress=100, error_code="RESUME_EXTRACTION_FAILED", error_message=str(exc))
                 return
             except Exception:
                 with self.session_factory() as session:
                     job = session.get(JobRecord, job_id)
                     if job is not None:
-                        update_job(session, job, status="failed", progress=100, error_code="RESUME_MODEL_FAILED", error_message="简历结构化分析失败，请稍后重试。")
+                        self._update_job(session, job, status="failed", progress=100, error_code="RESUME_MODEL_FAILED", error_message="简历结构化分析失败，请稍后重试。")
                 return
 
         if structured is None:
@@ -158,7 +171,7 @@ class TaskRuntime:
             with self.session_factory() as session:
                 job = session.get(JobRecord, job_id)
                 if job is not None:
-                    update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id})
+                    self._update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id})
             return
 
         try:
@@ -171,7 +184,7 @@ class TaskRuntime:
                     resume.status = "parsed"
                     session.add(resume)
                 if job is not None:
-                    update_job(session, job, status="failed", progress=100, error_code="RESUME_INDEX_FAILED", error_message="简历向量索引失败，请稍后重试。")
+                    self._update_job(session, job, status="failed", progress=100, error_code="RESUME_INDEX_FAILED", error_message="简历向量索引失败，请稍后重试。")
             return
         with self.session_factory() as session:
             resume = session.get(ResumeRecord, resume_id)
@@ -180,14 +193,16 @@ class TaskRuntime:
                 return
             resume.status = "indexed"
             session.add(resume)
-            update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id, "indexed_chunks": indexed_count})
+            self._update_job(session, job, status="completed", progress=100, result={"resume_id": resume_id, "indexed_chunks": indexed_count})
 
     async def process_jd(self, job_id: str) -> None:
         with self.session_factory() as session:
+            if not claim_job(session, job_id, self.worker_id, self.settings.job_lease_seconds):
+                return
             job = session.get(JobRecord, job_id)
             if job is None:
                 return
-            update_job(session, job, status="running", progress=25)
+            self._update_job(session, job, status="running", progress=25)
         with self.session_factory() as session:
             job = session.get(JobRecord, job_id)
             if job is None:
@@ -195,10 +210,10 @@ class TaskRuntime:
             payload = loads(job.payload_json, {})
             jd = session.get(JDRecord, payload["jd_id"])
             if jd is None:
-                update_job(session, job, status="failed", progress=100, error_code="JD_NOT_FOUND", error_message="JD resource is missing")
+                self._update_job(session, job, status="failed", progress=100, error_code="JD_NOT_FOUND", error_message="JD resource is missing")
                 return
             if jd.parsed_json and jd.status == "completed":
-                update_job(session, job, status="completed", progress=100, result={"jd_id": jd.id})
+                self._update_job(session, job, status="completed", progress=100, result={"jd_id": jd.id})
                 return
             if self.task_service is None:
                 await self._pause()
@@ -218,16 +233,16 @@ class TaskRuntime:
                 }
             else:
                 try:
-                    update_job(session, job, status="running", progress=55)
+                    self._update_job(session, job, status="running", progress=55)
                     parsed = (await asyncio.to_thread(self.task_service.parse_jd, jd.source_text)).model_dump(mode="json")
                 except Exception:
-                    update_job(session, job, status="failed", progress=100, error_code="JD_MODEL_FAILED", error_message="JD 结构化分析失败，请稍后重试。")
+                    self._update_job(session, job, status="failed", progress=100, error_code="JD_MODEL_FAILED", error_message="JD 结构化分析失败，请稍后重试。")
                     return
             jd.title = parsed["job_title"]
             jd.parsed_json = json.dumps(parsed, ensure_ascii=False)
             jd.status = "completed"
             session.add(jd)
-            update_job(session, job, status="completed", progress=100, result={"jd_id": jd.id})
+            self._update_job(session, job, status="completed", progress=100, result={"jd_id": jd.id})
 
     async def process_match(self, thread_id: str, run_id: str, strict: bool, *, emit_terminal_event: bool = True) -> None:
         if self.task_service is not None:

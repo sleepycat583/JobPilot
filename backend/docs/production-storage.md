@@ -42,6 +42,10 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 4. 后台任务与 SSE 事件需要共享任务/事件存储，并重新验证 worker 并发和恢复语义。
 5. 完成上述迁移并通过回归后，才可以把 Uvicorn worker 数量从 1 调高。
 
+后台简历/JD 任务使用数据库租约进行跨实例 claim：`JOB_LEASE_SECONDS` 默认 900 秒；同一任务
+只能被一个未过期 owner 执行，实例崩溃后由其他实例接管过期租约。业务动作仍依靠 run_id 和
+幂等记录恢复，不能仅靠进程内任务集合保证幂等。
+
 业务库使用 Psycopg 3 方言。`postgres://...` 和 `postgresql://...` 会在应用和 Alembic
 入口统一规范化为 `postgresql+psycopg://...`，不依赖已废弃的 psycopg2 驱动。完成
 `alembic upgrade head` 后，可以运行：

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://127.0.0.1:5173"
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
     mock_task_delay_seconds: float = Field(default=0.15, ge=0.01, le=3.0)
+    job_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     graph_checkpoint_path: Path = BACKEND_DIR / "data" / "langgraph.db"
     checkpoint_backend: Literal["sqlite", "postgres"] = "sqlite"

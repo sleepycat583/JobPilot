@@ -1,8 +1,8 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import ExecutionEventRecord, JobRecord, ThreadRecord
@@ -109,11 +109,37 @@ def update_job(
     result: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
+    lease_owner: str | None = None,
+    lease_seconds: int | None = None,
 ) -> None:
     job.status = status
     job.progress = progress
     job.result_json = dumps(result) if result is not None else job.result_json
     job.error_code = error_code
     job.error_message = error_message
+    if status in {"completed", "failed"} and lease_owner is not None and job.lease_owner == lease_owner:
+        job.lease_owner = None
+        job.lease_expires_at = None
+    elif status == "running" and lease_owner is not None and job.lease_owner == lease_owner and lease_seconds is not None:
+        job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
     session.add(job)
     session.commit()
+
+
+def claim_job(session: Session, job_id: str, owner: str, lease_seconds: int) -> bool:
+    """Atomically claim a queued job or reclaim an expired lease."""
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=lease_seconds)
+    statement = (
+        update(JobRecord)
+        .where(
+            JobRecord.id == job_id,
+            JobRecord.status.in_(["queued", "running"]),
+            or_(JobRecord.lease_owner.is_(None), JobRecord.lease_expires_at < now, JobRecord.lease_owner == owner),
+        )
+        .values(status="running", lease_owner=owner, lease_expires_at=expires_at)
+    )
+    result = session.execute(statement)
+    session.commit()
+    return result.rowcount == 1

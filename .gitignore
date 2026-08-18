@@ -13,10 +13,12 @@
 node_modules/
 backend/.venv/
 
-# ── 前端构建产物 ──────────────────────────────────────────────
+# ── 前端构建产物与工具临时文件 ────────────────────────────────
 dist/
 .vite/
 frontend/output/
+# Playwright CLI 录制的交互快照，属于工具产物，不入库
+frontend/.playwright-cli/
 
 # ── 后端运行时数据（SQLite 数据库、上传文件、WAL 日志）────────
 # data/ 下的所有内容都是运行时生成的，不应入库

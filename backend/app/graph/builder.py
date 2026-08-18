@@ -3,7 +3,7 @@ from langgraph_supervisor import create_supervisor
 
 from app.graph.handoff import create_semantic_handoff_tool
 from app.graph.models import ModelBundle
-from app.graph.prompts import SUPERVISOR_PROMPT
+from app.graph.prompts import build_supervisor_prompt
 from app.graph.state import CareerGraphState, WorkerName
 from app.graph.workers import build_worker_graph, finalize_supervisor_step
 
@@ -27,7 +27,7 @@ def build_career_graph(models: ModelBundle, checkpointer: BaseCheckpointSaver):
         workers,
         model=models.supervisor_model,
         tools=handoff_tools,
-        prompt=SUPERVISOR_PROMPT,
+        prompt=build_supervisor_prompt,
         post_model_hook=finalize_supervisor_step,
         state_schema=CareerGraphState,
         output_mode="last_message",

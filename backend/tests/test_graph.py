@@ -9,7 +9,7 @@ from app.core.config import Settings, configure_langsmith
 from app.graph import build_career_graph, build_model_bundle
 from app.graph.builder import WORKER_DESCRIPTIONS
 from app.graph.models import ModelBundle, StubSupervisorModel
-from app.graph.prompts import STUB_OUTPUTS, SUPERVISOR_PROMPT
+from app.graph.prompts import STUB_OUTPUTS, SUPERVISOR_PROMPT, build_supervisor_prompt
 from app.graph.state import WORKER_WRITABLE_FIELDS, WorkerName
 from app.graph.workers import build_worker_update, finalize_supervisor_step, sanitize_output
 
@@ -88,6 +88,21 @@ def test_supervisor_prompt_enforces_route_only_boundary() -> None:
     assert "不能回答用户问题" in SUPERVISOR_PROMPT
     assert "且只调用一个" in SUPERVISOR_PROMPT
     assert "不设置阈值" in SUPERVISOR_PROMPT
+
+
+def test_supervisor_receives_active_interview_routing_context() -> None:
+    messages = build_supervisor_prompt(
+        {
+            "messages": [HumanMessage(content="这是我的回答")],
+            "readonly_context": {
+                "latest_user_message": "这是我的回答",
+                "active_interview": {"phase": "question", "current_question": "请介绍项目"},
+                "pending_interrupt": {"type": "interview_answer", "title": "第 1 题"},
+            },
+        }
+    )
+    assert "interview_answer" in str(messages[0].content)
+    assert messages[-1].content == "这是我的回答"
 
 
 def test_openai_mode_requires_environment_key() -> None:

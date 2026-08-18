@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     mock_task_delay_seconds: float = Field(default=0.15, ge=0.01, le=3.0)
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     graph_checkpoint_path: Path = BACKEND_DIR / "data" / "langgraph.db"
+    chroma_persist_directory: Path = BACKEND_DIR / "data" / "chroma"
+    chroma_collection_name: str = "career_resume_chunks"
+    embedding_model: str = "text-embedding-v4"
+    embedding_dimension: int = Field(default=1024, ge=1, le=8192)
+    embedding_batch_size: int = Field(default=16, ge=1, le=128)
     llm_mode: Literal["stub", "openai"] = "stub"
     openai_model: str = "gpt-4.1-mini"
     openai_api_key: SecretStr | None = None

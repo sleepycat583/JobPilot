@@ -61,6 +61,26 @@
     "message": "继续下一题。"
   },
   {
+    "id": "interview_answer_from_interrupt",
+    "expected_worker": "interview_worker",
+    "history": [
+      {"role": "assistant", "content": "请介绍一次服务稳定性改造。"}
+    ],
+    "context": {
+      "active_interview": {
+        "phase": "question",
+        "current_question": "请介绍一次服务稳定性改造。",
+        "current_index": 0
+      },
+      "pending_interrupt": {
+        "type": "interview_answer",
+        "title": "第 1 题",
+        "detail": "请介绍一次服务稳定性改造。"
+      }
+    },
+    "message": "我负责拆分核心服务，并通过压测和监控验证吞吐与稳定性提升。"
+  },
+  {
     "id": "chat_smalltalk",
     "expected_worker": "chat_worker",
     "history": [],

@@ -14,6 +14,16 @@ WorkerName = Literal[
     "chat_worker",
 ]
 
+WorkerAction = Literal[
+    "respond",
+    "create_jd",
+    "run_match",
+    "start_interview",
+    "submit_interview_answer",
+    "continue_interview",
+    "end_interview",
+]
+
 
 class RouteAudit(TypedDict):
     worker: WorkerName
@@ -26,6 +36,8 @@ class ReadonlyContext(TypedDict, total=False):
     conversation_tail: list[dict[str, str]]
     selected_resume: dict[str, Any] | None
     selected_jd: dict[str, Any] | None
+    active_interview: dict[str, Any] | None
+    pending_interrupt: dict[str, Any] | None
 
 
 class CareerGraphState(TypedDict, total=False):

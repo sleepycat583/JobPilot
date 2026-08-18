@@ -1,42 +1,60 @@
 import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.models import ModelBundle
 from app.graph.prompts import STUB_OUTPUTS, WORKER_PROMPTS
-from app.graph.state import CareerGraphState, WorkerName
+from app.graph.state import CareerGraphState, WorkerAction, WorkerName
 
 
-def _message_text(message: BaseMessage) -> str:
-    if isinstance(message.content, str):
-        return message.content.strip()
-    text_blocks = [
-        str(block.get("text", ""))
-        for block in message.content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
-    return "\n".join(part for part in text_blocks if part).strip()
+class WorkerDecision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    action: WorkerAction = "respond"
+    message: str = Field(default="", max_length=12_000)
+
+
+ALLOWED_ACTIONS: dict[WorkerName, frozenset[WorkerAction]] = {
+    "resume_worker": frozenset({"respond"}),
+    "jd_worker": frozenset({"respond", "create_jd"}),
+    "match_worker": frozenset({"respond", "run_match"}),
+    "interview_worker": frozenset(
+        {
+            "respond",
+            "start_interview",
+            "submit_interview_answer",
+            "continue_interview",
+            "end_interview",
+        }
+    ),
+    "chat_worker": frozenset({"respond"}),
+}
 
 
 def build_worker_update(worker: WorkerName, state: CareerGraphState, models: ModelBundle) -> dict[str, Any]:
     context = state.get("readonly_context", {})
     if models.worker_model is None:
         output = STUB_OUTPUTS[worker]
+        action: WorkerAction = "respond"
     else:
         input_payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
-        response = models.worker_model.invoke(
+        runnable = models.worker_model.with_structured_output(WorkerDecision, method="function_calling")
+        response = runnable.invoke(
             [
                 SystemMessage(content=WORKER_PROMPTS[worker]),
                 HumanMessage(content=f"只读上下文：{input_payload}"),
             ]
         )
-        output = _message_text(response) or "暂时无法生成有效结果，请稍后重试。"
+        decision = response if isinstance(response, WorkerDecision) else WorkerDecision.model_validate(response)
+        action = decision.action if decision.action in ALLOWED_ACTIONS[worker] else "respond"
+        output = decision.message.strip() or "正在执行你的请求。"
     return {
         "messages": [AIMessage(content=output, name=worker)],
         "worker_name": worker,
-        "worker_result": {"kind": "assistant_text", "worker": worker},
+        "worker_result": {"kind": "worker_decision", "worker": worker, "action": action},
         "visible_output": output,
     }
 

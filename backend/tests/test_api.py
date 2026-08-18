@@ -7,6 +7,15 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.events import _sse
 from app.models import ExecutionEventRecord
+from app.services.llm_tasks import (
+    InterviewFeedback,
+    InterviewQuestion,
+    InterviewReport,
+    MatchEvidence,
+    StructuredJD,
+    StructuredMatch,
+    StructuredResume,
+)
 from app.services.store import loads
 
 
@@ -217,3 +226,132 @@ def test_langgraph_checkpoint_is_persisted(client: TestClient) -> None:
             (thread_id,),
         ).fetchone()[0]
     assert count > 0
+
+
+class ContractTaskService:
+    def parse_resume(self, _source_text: str, *, chunk_count: int) -> StructuredResume:
+        return StructuredResume(
+            profile="后端开发工程师",
+            target_role="高级后端开发工程师",
+            years=4,
+            education="本科",
+            skills=["Java", "Spring Boot"],
+            chunk_count=chunk_count,
+            privacy_filtered=True,
+        )
+
+    def parse_jd(self, _source_text: str) -> StructuredJD:
+        return StructuredJD(
+            job_title="高级后端开发工程师",
+            responsibilities=["负责核心服务"],
+            required_skills=["Java"],
+            interview_focus=["服务稳定性"],
+        )
+
+    def match(self, _resume: dict[str, Any], _jd: dict[str, Any]) -> StructuredMatch:
+        return StructuredMatch(
+            total_score=76,
+            dimension_scores={"必备技能": 32, "核心职责": 22, "加分技能": 6, "硬性条件": 8, "证据质量": 8},
+            strengths=["Java 经验明确"],
+            gaps=["稳定性证据不足"],
+            evidence_count=1,
+            evidence=[MatchEvidence(requirement="Java", resume_evidence="项目使用 Java", assessment="匹配", status="matched")],
+        )
+
+    def generate_question(
+        self,
+        _interview_type: str,
+        _resume: dict[str, Any],
+        _jd: dict[str, Any],
+        _records: list[dict[str, Any]],
+    ) -> InterviewQuestion:
+        return InterviewQuestion(question="请介绍一次服务稳定性改造。", focus="稳定性")
+
+    def evaluate_answer(
+        self,
+        _interview_type: str,
+        _question: str,
+        _answer: str,
+        _resume: dict[str, Any],
+        _jd: dict[str, Any],
+    ) -> InterviewFeedback:
+        return InterviewFeedback(score=81, title="证据清楚", detail="可以补充方案权衡。", tags=["结构清晰"])
+
+    def report(
+        self,
+        _interview_type: str,
+        _records: list[dict[str, Any]],
+        _resume: dict[str, Any],
+        _jd: dict[str, Any],
+    ) -> InterviewReport:
+        return InterviewReport(overall_score=80, summary="整体表现稳定", dimension_scores={"技术准确性": 82}, actions=["补充方案权衡"])
+
+
+def test_real_task_contract_drives_parse_match_and_interview_state(client: TestClient) -> None:
+    client.app.state.runtime.task_service = ContractTaskService()
+
+    resume_response = client.post(
+        "/api/resumes",
+        headers=key(),
+        files={"file": ("resume.txt", "Java 后端开发经历".encode(), "text/plain")},
+    )
+    resume_job = wait_for_job(client, resume_response.json()["job_id"])
+    resume_id = resume_response.json()["resource_id"]
+    resume = client.get(f"/api/resumes/{resume_id}").json()
+    assert resume_job["status"] == "completed"
+    assert resume["status"] == "parsed"
+    assert resume["structured"]["profile"] == "后端开发工程师"
+
+    jd_response = client.post(
+        "/api/jds",
+        headers=key(),
+        json={"text": "招聘高级 Java 后端开发工程师，负责核心服务设计、开发与稳定性建设。"},
+    )
+    assert wait_for_job(client, jd_response.json()["job_id"])["status"] == "completed"
+    jd_id = jd_response.json()["resource_id"]
+
+    thread_id = create_thread(client)
+    match_response = client.post(
+        "/api/matches",
+        headers=key(),
+        json={"thread_id": thread_id, "resume_id": resume_id, "jd_id": jd_id, "strict": False},
+    )
+    assert match_response.status_code == 202
+    match_state = wait_for_thread(client, thread_id, "completed")
+    assert match_state["match_result"]["total_score"] == 76
+    assert match_state["match_result"]["evidence"][0]["status"] == "matched"
+
+    started = client.post(
+        "/api/interviews",
+        headers=key(),
+        json={
+            "thread_id": thread_id,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "interview_type": "综合面试",
+            "question_count": 3,
+            "feedback_mode": "each",
+        },
+    )
+    assert started.status_code == 202
+    interview_state = client.get(f"/api/threads/{thread_id}/state").json()
+    assert interview_state["interview"]["current_question"] == "请介绍一次服务稳定性改造。"
+
+    feedback = client.post(
+        f"/api/threads/{thread_id}/resume",
+        headers=key(),
+        json={
+            "interrupt_id": interview_state["pending_interrupt"]["id"],
+            "action": "submit_answer",
+            "payload": {"answer": "我补充了监控并验证告警覆盖率。"},
+        },
+    ).json()
+    assert feedback["interview"]["feedback"]["score"] == 81
+
+    report = client.post(
+        f"/api/threads/{thread_id}/resume",
+        headers=key(),
+        json={"interrupt_id": feedback["pending_interrupt"]["id"], "action": "end", "payload": {}},
+    ).json()
+    assert report["status"] == "completed"
+    assert report["interview"]["report"]["overall_score"] == 80

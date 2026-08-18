@@ -21,7 +21,8 @@ from app.api.routes import events, health, interviews, jds, jobs, matches, resum
 from app.core.config import configure_langsmith, get_settings
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
-from app.services.mock_runtime import MockRuntime
+from app.services.task_runtime import TaskRuntime
+from app.services.vector_store import VectorStore
 
 
 @asynccontextmanager
@@ -35,21 +36,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
-    app.state.runtime = MockRuntime(app.state.session_factory, settings)
     settings.graph_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_manager = SqliteSaver.from_conn_string(str(settings.graph_checkpoint_path))
     app.state.graph_checkpointer = checkpoint_manager.__enter__()
     try:
         models = build_model_bundle(settings)
+        app.state.vector_store = VectorStore(settings) if settings.llm_mode == "openai" else None
+        app.state.runtime = TaskRuntime(app.state.session_factory, settings, models.worker_model, app.state.vector_store)
         app.state.career_graph = build_career_graph(models, app.state.graph_checkpointer)
-        app.state.graph_runtime = LangGraphRuntime(app.state.career_graph, app.state.session_factory)
+        app.state.graph_runtime = LangGraphRuntime(app.state.career_graph, app.state.session_factory, app.state.runtime)
         await app.state.runtime.recover_pending_jobs()
         await app.state.graph_runtime.recover_incomplete_threads()
         yield
     finally:
         if hasattr(app.state, "graph_runtime"):
             await app.state.graph_runtime.shutdown()
-        await app.state.runtime.shutdown()
+        if hasattr(app.state, "runtime"):
+            await app.state.runtime.shutdown()
         checkpoint_manager.__exit__(None, None, None)
         engine.dispose()
 

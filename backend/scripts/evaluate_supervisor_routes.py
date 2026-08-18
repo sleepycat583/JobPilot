@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -15,7 +15,7 @@ from app.core.config import configure_langsmith, get_settings  # noqa: E402
 from app.graph.builder import WORKER_DESCRIPTIONS  # noqa: E402
 from app.graph.handoff import create_semantic_handoff_tool  # noqa: E402
 from app.graph.models import build_model_bundle  # noqa: E402
-from app.graph.prompts import SUPERVISOR_PROMPT  # noqa: E402
+from app.graph.prompts import build_supervisor_prompt  # noqa: E402
 
 
 EVAL_PATH = BACKEND_DIR / "evals" / "supervisor_routes.json"
@@ -54,10 +54,17 @@ def main() -> int:
 
     failures = 0
     for case in cases:
-        messages = [SystemMessage(content=SUPERVISOR_PROMPT)]
-        messages.extend(_history_messages(case.get("history", [])))
+        history = case.get("history", [])
+        messages = _history_messages(history)
         messages.append(HumanMessage(content=case["message"]))
-        response = supervisor.invoke(messages)
+        readonly_context = {
+            "latest_user_message": case["message"],
+            "conversation_tail": [*history, {"role": "user", "content": case["message"]}],
+            **case.get("context", {}),
+        }
+        response = supervisor.invoke(
+            build_supervisor_prompt({"messages": messages, "readonly_context": readonly_context})
+        )
         actual = _selected_worker(response)
         expected = case["expected_worker"]
         passed = actual == expected

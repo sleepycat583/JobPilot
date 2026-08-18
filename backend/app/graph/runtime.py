@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.graph.state import CareerGraphState
 from app.models import JDRecord, ResumeRecord, ThreadRecord
+from app.services.conversation_actions import ConversationActionService, ConversationActionOutcome
 from app.services.store import append_event, load_thread_state, loads, save_thread_state, utc_iso
+from app.services.task_runtime import TaskRuntime
 
 
 WORKER_LABELS = {
@@ -22,9 +24,17 @@ WORKER_LABELS = {
 
 
 class LangGraphRuntime:
-    def __init__(self, graph: Any, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        graph: Any,
+        session_factory: sessionmaker[Session],
+        task_runtime: TaskRuntime | None = None,
+    ) -> None:
         self.graph = graph
         self.session_factory = session_factory
+        self.action_service = (
+            ConversationActionService(session_factory, task_runtime) if task_runtime is not None else None
+        )
         self.tasks: set[asyncio.Task[None]] = set()
 
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
@@ -83,6 +93,8 @@ class LangGraphRuntime:
                     "source_text": jd.source_text[:12_000],
                     "parsed": loads(jd.parsed_json),
                 },
+                "active_interview": state.get("interview"),
+                "pending_interrupt": state.get("pending_interrupt"),
             }
 
     async def process_message(self, thread_id: str, run_id: str, content: str) -> None:
@@ -123,7 +135,7 @@ class LangGraphRuntime:
                 "public_output": None,
             }
             result = await asyncio.to_thread(self.graph.invoke, graph_input, self._config(thread_id, run_id))
-            await self._finalize_success(thread_id, run_id, result)
+            await self._handle_graph_result(thread_id, run_id, content, result)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -145,10 +157,10 @@ class LangGraphRuntime:
             values = snapshot.values if snapshot else {}
             if values.get("run_id") == run_id:
                 if values.get("worker_name") and values.get("public_output"):
-                    await self._finalize_success(thread_id, run_id, values)
+                    await self._handle_graph_result(thread_id, run_id, latest_content, values)
                     return
                 result = await asyncio.to_thread(self.graph.invoke, None, self._config(thread_id, run_id))
-                await self._finalize_success(thread_id, run_id, result)
+                await self._handle_graph_result(thread_id, run_id, latest_content, result)
                 return
             if latest_content:
                 await self.process_message(thread_id, run_id, latest_content)
@@ -158,6 +170,22 @@ class LangGraphRuntime:
             raise
         except Exception:
             await self._finalize_failure(thread_id, run_id)
+
+    async def _handle_graph_result(
+        self,
+        thread_id: str,
+        run_id: str,
+        content: str,
+        result: dict[str, Any],
+    ) -> None:
+        worker_result = result.get("worker_result") or {}
+        action = str(worker_result.get("action", "respond"))
+        if self.action_service is not None and action != "respond":
+            outcome = await self.action_service.execute(thread_id, run_id, action, content)
+            if outcome is not None:
+                await self._finalize_action(thread_id, run_id, outcome)
+                return
+        await self._finalize_success(thread_id, run_id, result)
 
     async def _finalize_success(self, thread_id: str, run_id: str, result: dict[str, Any]) -> None:
         public_output = result.get("public_output")
@@ -179,18 +207,22 @@ class LangGraphRuntime:
                 "created_at": utc_iso(),
             }
             state["messages"].append(message)
-            state["status"] = "completed"
-            state["task"] = {
-                "status": "completed",
-                "title": f"{worker_label} 已完成",
-                "detail": "最终内容已通过输出净化并同步到当前会话。",
-                "steps": [
-                    {"label": "读取对话上下文", "status": "done"},
-                    {"label": "语义意图路由", "status": "done"},
-                    {"label": "净化用户输出", "status": "done"},
-                ],
-            }
+            if state.get("pending_interrupt"):
+                state["status"] = "interrupted"
+            else:
+                state["status"] = "completed"
+                state["task"] = {
+                    "status": "completed",
+                    "title": f"{worker_label} 已完成",
+                    "detail": "最终内容已通过输出净化并同步到当前会话。",
+                    "steps": [
+                        {"label": "读取对话上下文", "status": "done"},
+                        {"label": "语义意图路由", "status": "done"},
+                        {"label": "净化用户输出", "status": "done"},
+                    ],
+                }
             state.pop("active_run_id", None)
+            state.pop("conversation_action", None)
             save_thread_state(session, thread, state)
             append_event(
                 session,
@@ -206,6 +238,67 @@ class LangGraphRuntime:
                 event_type="run_completed",
                 data={"run_id": run_id, "kind": "langgraph"},
             )
+
+    async def _finalize_action(
+        self,
+        thread_id: str,
+        run_id: str,
+        outcome: ConversationActionOutcome,
+    ) -> None:
+        from app.graph.workers import sanitize_output
+
+        cleaned = sanitize_output({"visible_output": outcome.message}).get("public_output")
+        if not isinstance(cleaned, str):
+            raise ValueError("Conversation action did not produce public output")
+        with self.session_factory() as session:
+            thread = session.get(ThreadRecord, thread_id)
+            if thread is None:
+                return
+            state = load_thread_state(thread)
+            if state.get("active_run_id") not in (None, run_id):
+                return
+            state["messages"].append(
+                {"id": str(uuid4()), "role": "assistant", "content": cleaned, "created_at": utc_iso()}
+            )
+            state["status"] = outcome.status
+            if not (outcome.status == "interrupted" and state.get("pending_interrupt")):
+                state["task"] = {
+                    "status": outcome.status,
+                    "title": outcome.title,
+                    "detail": outcome.detail,
+                    "steps": [
+                        {"label": "读取对话上下文", "status": "done"},
+                        {"label": "语义意图路由", "status": "done"},
+                        {"label": "执行 Worker 动作", "status": "done"},
+                    ],
+                }
+            state.pop("active_run_id", None)
+            state.pop("conversation_action", None)
+            save_thread_state(session, thread, state)
+            message = state["messages"][-1]
+            append_event(
+                session,
+                stream_type="thread",
+                stream_id=thread_id,
+                event_type="message_completed",
+                data={"run_id": run_id, "message": message},
+            )
+            if outcome.status == "completed":
+                append_event(
+                    session,
+                    stream_type="thread",
+                    stream_id=thread_id,
+                    event_type="run_completed",
+                    data={"run_id": run_id, "kind": "langgraph_action"},
+                )
+            elif outcome.status == "failed":
+                append_event(
+                    session,
+                    stream_type="thread",
+                    stream_id=thread_id,
+                    event_type="run_failed",
+                    data={"run_id": run_id, "message": "Worker action failed"},
+                )
 
     async def _finalize_failure(self, thread_id: str, run_id: str) -> None:
         with self.session_factory() as session:
@@ -223,6 +316,7 @@ class LangGraphRuntime:
                 "steps": [],
             }
             state.pop("active_run_id", None)
+            state.pop("conversation_action", None)
             save_thread_state(session, thread, state)
             append_event(
                 session,

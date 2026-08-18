@@ -53,9 +53,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [selectedJDId, setSelectedJDId] = useState('')
 
   useEffect(() => {
-    if (stateQuery.data?.selected_resume_id && !selectedResumeId) setSelectedResumeId(stateQuery.data.selected_resume_id)
-    if (stateQuery.data?.selected_jd_id && !selectedJDId) setSelectedJDId(stateQuery.data.selected_jd_id)
-  }, [selectedJDId, selectedResumeId, stateQuery.data])
+    if (stateQuery.data?.selected_resume_id) setSelectedResumeId(stateQuery.data.selected_resume_id)
+    if (stateQuery.data?.selected_jd_id) setSelectedJDId(stateQuery.data.selected_jd_id)
+  }, [stateQuery.data?.selected_jd_id, stateQuery.data?.selected_resume_id])
 
   useEffect(() => {
     if (!threadId) return

@@ -63,6 +63,22 @@ export type ResumeRead = {
     skills?: string[]
     chunk_count?: number
     privacy_filtered?: boolean
+    experience?: Array<{
+      company: string
+      role: string
+      period: string
+      highlights: string[]
+      technologies: string[]
+      evidence: string
+    }>
+    projects?: Array<{
+      name: string
+      role: string
+      period: string
+      highlights: string[]
+      technologies: string[]
+      evidence: string
+    }>
   }
   created_at: string
   updated_at: string
@@ -94,6 +110,12 @@ export type MatchResult = {
   gaps: string[]
   evidence_count: number
   low_score_review_required: boolean
+  evidence?: Array<{
+    requirement: string
+    resume_evidence: string
+    assessment: string
+    status: string
+  }>
 }
 
 export type InterviewState = {

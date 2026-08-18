@@ -743,6 +743,8 @@ input:focus-visible {
   color: #39424c;
   font-size: 13px;
   line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .message.user .message-content > p {

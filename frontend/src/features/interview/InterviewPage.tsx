@@ -55,7 +55,7 @@ type SetupProps = {
 }
 
 function InterviewSetup(props: SetupProps) {
-  return <div className="page-view interview-view setup-view"><div className="setup-heading"><span className="eyebrow">新建模拟面试</span><h2>按目标岗位练习真实问题</h2><p>第二阶段使用确定性 Mock 问题，真实动态追问将在面试 Worker 阶段接入。</p></div><div className="setup-form">
+  return <div className="page-view interview-view setup-view"><div className="setup-heading"><span className="eyebrow">新建模拟面试</span><h2>按目标岗位练习真实问题</h2></div><div className="setup-form">
     <div className="form-row"><label htmlFor="interview-jd">目标岗位</label><select id="interview-jd" className="select-button" value={props.jdId} onChange={(event) => props.setJDId(event.target.value)}><option value="">请选择 JD</option>{props.jds.map((jd) => <option key={jd.id} value={jd.id}>{jd.title}</option>)}</select></div>
     <div className="form-row"><label htmlFor="interview-resume">使用简历</label><select id="interview-resume" className="select-button" value={props.resumeId} onChange={(event) => props.setResumeId(event.target.value)}><option value="">请选择简历</option>{props.resumes.map((resume) => <option key={resume.id} value={resume.id}>{resume.display_name}</option>)}</select></div>
     <div className="form-row"><label>面试类型</label><div className="segmented-control">{(['综合面试', '技术专项', '项目深挖'] as const).map((type) => <button key={type} className={props.interviewType === type ? 'active' : ''} type="button" aria-pressed={props.interviewType === type} onClick={() => props.setInterviewType(type)}>{type}</button>)}</div></div>

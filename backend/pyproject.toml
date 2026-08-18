@@ -11,11 +11,13 @@ dependencies = [
   "langchain-openai>=0.3,<1",
   "langgraph>=0.6,<1",
   "langgraph-checkpoint-sqlite>=2,<3",
+  "langgraph-checkpoint-postgres==2.0.21",
   "langgraph-supervisor>=0.0.29,<1",
   "pypdf>=5,<7",
   "pydantic-settings>=2.10,<3",
   "python-multipart>=0.0.20,<1",
   "python-docx>=1.1,<2",
+  "psycopg[binary]>=3.2,<4",
   "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.35,<1",
 ]

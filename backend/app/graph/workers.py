@@ -76,9 +76,36 @@ def sanitize_output(state: CareerGraphState) -> dict[str, str | None]:
     if not isinstance(visible, str):
         return {"public_output": None}
     cleaned = "".join(character for character in visible if character in "\n\t" or ord(character) >= 32).strip()
+    cleaned = _extract_public_text(cleaned)
     if not cleaned:
         cleaned = "暂时无法生成有效结果，请稍后重试。"
     return {"public_output": cleaned[:12_000]}
+
+
+def _extract_public_text(value: str) -> str:
+    """Keep only the user-facing field if a model leaks a structured envelope."""
+
+    candidate = value.strip()
+    if candidate.startswith("```") and candidate.endswith("```"):
+        lines = candidate.splitlines()
+        candidate = "\n".join(lines[1:-1]).strip()
+    if not candidate.startswith(("{", "[")):
+        if any(marker in candidate for marker in ("transfer_to_", '"tool_calls"', '"worker_result"')):
+            return "暂时无法生成有效结果，请稍后重试。"
+        return value
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return value
+    if isinstance(payload, dict):
+        for key in ("public_output", "message", "content", "text"):
+            candidate = payload.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return "暂时无法生成有效结果，请稍后重试。"
+    if isinstance(payload, list):
+        return "暂时无法生成有效结果，请稍后重试。"
+    return candidate
 
 
 def finalize_supervisor_step(state: CareerGraphState) -> dict[str, Any]:

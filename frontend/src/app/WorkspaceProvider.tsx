@@ -43,11 +43,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   })
   const threadId = bootstrap.data?.thread_id ?? null
   const [sseHealthy, setSseHealthy] = useState(true)
+  const [sseRetryDelay, setSseRetryDelay] = useState(5_000)
   const stateQuery = useQuery({
     queryKey: ['thread-state', threadId],
     queryFn: () => api.getThreadState(threadId!),
     enabled: Boolean(threadId),
-    refetchInterval: sseHealthy ? false : 5_000,
+    refetchInterval: sseHealthy ? false : sseRetryDelay,
   })
   const [selectedResumeId, setSelectedResumeId] = useState('')
   const [selectedJDId, setSelectedJDId] = useState('')
@@ -62,12 +63,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const source = new EventSource(`/api/threads/${threadId}/events`)
     const refresh = () => {
       setSseHealthy(true)
+      setSseRetryDelay(5_000)
       void queryClient.invalidateQueries({ queryKey: ['thread-state', threadId] })
     }
-    const events = ['node_started', 'message_completed', 'run_completed', 'interrupt_required', 'run_resumed']
+    const events = ['node_started', 'message_completed', 'run_completed', 'run_failed', 'interrupt_required', 'run_resumed']
     events.forEach((name) => source.addEventListener(name, refresh))
-    source.onopen = () => setSseHealthy(true)
-    source.onerror = () => setSseHealthy(false)
+    source.onopen = () => {
+      setSseHealthy(true)
+      setSseRetryDelay(5_000)
+    }
+    source.onerror = () => {
+      setSseHealthy(false)
+      setSseRetryDelay((current) => Math.min(current * 2, 30_000))
+    }
     return () => source.close()
   }, [queryClient, threadId])
 

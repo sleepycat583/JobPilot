@@ -15,9 +15,8 @@ warnings.filterwarnings(
     category=LangChainPendingDeprecationWarning,
 )
 
-from langgraph.checkpoint.sqlite import SqliteSaver
-
 from app.api.routes import events, health, interviews, jds, jobs, matches, resumes, threads
+from app.core.checkpoint import initialize_checkpoint, open_checkpoint
 from app.core.config import configure_langsmith, get_settings
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
@@ -36,10 +35,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
-    settings.graph_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_manager = SqliteSaver.from_conn_string(str(settings.graph_checkpoint_path))
+    checkpoint_manager = open_checkpoint(settings)
     app.state.graph_checkpointer = checkpoint_manager.__enter__()
     try:
+        initialize_checkpoint(app.state.graph_checkpointer, settings)
         models = build_model_bundle(settings)
         app.state.vector_store = VectorStore(settings) if settings.llm_mode == "openai" else None
         app.state.runtime = TaskRuntime(app.state.session_factory, settings, models.worker_model, app.state.vector_store)

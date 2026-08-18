@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Any
@@ -6,7 +7,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.api.routes.events import _sse
-from app.models import ExecutionEventRecord
+from app.models import ExecutionEventRecord, ThreadRecord
 from app.services.llm_tasks import (
     InterviewFeedback,
     InterviewQuestion,
@@ -16,7 +17,7 @@ from app.services.llm_tasks import (
     StructuredMatch,
     StructuredResume,
 )
-from app.services.store import loads
+from app.services.store import append_event, events_after, load_thread_state, loads, save_thread_state
 
 
 def key() -> dict[str, str]:
@@ -79,6 +80,17 @@ def test_health_and_openapi(client: TestClient) -> None:
     assert client.get("/api/health/live").json() == {"status": "ok"}
     assert client.get("/api/health/ready").json() == {"status": "ready"}
     assert "/api/resumes" in client.get("/openapi.json").json()["paths"]
+
+
+def test_readiness_reports_uninitialized_app(client: TestClient) -> None:
+    runtime = client.app.state.runtime
+    graph_runtime = client.app.state.graph_runtime
+    del client.app.state.runtime
+    response = client.get("/api/health/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "APP_NOT_READY"
+    client.app.state.runtime = runtime
+    client.app.state.graph_runtime = graph_runtime
 
 
 def test_resume_upload_is_async_and_idempotent(client: TestClient) -> None:
@@ -193,6 +205,56 @@ def test_sse_serialization_and_persisted_payloads_are_sanitized(client: TestClie
     serialized = json.dumps([loads(record.payload_json, {}) for record in records], ensure_ascii=False).lower()
     for forbidden in ("prompt", "tool_call", "raw_state", "api_key", "route_audit", "confidence"):
         assert forbidden not in serialized
+
+
+def test_sse_rejects_invalid_last_event_id(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    response = client.get(f"/api/threads/{thread_id}/events", headers={"Last-Event-ID": "not-a-number"})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "LAST_EVENT_ID_INVALID"
+
+
+def test_sse_replays_only_events_after_last_event_id(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    with client.app.state.session_factory() as session:
+        first = append_event(session, stream_type="thread", stream_id=thread_id, event_type="node_started", data={"step": 1})
+        second = append_event(session, stream_type="thread", stream_id=thread_id, event_type="run_completed", data={"step": 2})
+        replay = events_after(session, stream_type="thread", stream_id=thread_id, after_id=first.id)
+    assert [record.id for record in replay] == [second.id]
+
+    class RequestStub:
+        app = client.app
+        calls = 0
+
+        async def is_disconnected(self) -> bool:
+            self.calls += 1
+            return self.calls > 1
+
+    async def collect() -> list[str]:
+        from app.api.routes.events import thread_events
+
+        response = await thread_events(thread_id, RequestStub(), last_event_id=str(first.id))
+        return [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
+
+    rendered = asyncio.run(collect())
+    assert any("retry: 2000" in chunk for chunk in rendered)
+    event_chunks = [chunk for chunk in rendered if "event: run_completed" in chunk]
+    assert len(event_chunks) == 1
+    assert '"step":2' in event_chunks[0]
+    assert all('\"step\":1' not in chunk for chunk in event_chunks)
+
+
+def test_chat_message_rejects_when_thread_is_already_running(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    with client.app.state.session_factory() as session:
+        thread = session.get(ThreadRecord, thread_id)
+        assert thread is not None
+        state = load_thread_state(thread)
+        state["status"] = "running"
+        save_thread_state(session, thread, state)
+    response = client.post(f"/api/threads/{thread_id}/messages", headers=key(), json={"content": "并发请求"})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "THREAD_BUSY"
 
 
 def test_chat_message_idempotency_does_not_duplicate_graph_run(client: TestClient) -> None:

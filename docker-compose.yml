@@ -1,0 +1,43 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: sqlite:////app/data/app.db
+      UPLOAD_DIR: /app/data/uploads
+      GRAPH_CHECKPOINT_PATH: /app/data/langgraph.db
+      CHECKPOINT_BACKEND: sqlite
+      GRAPH_CHECKPOINT_DATABASE_URL: ""
+      AUTO_CREATE_CHECKPOINT_SCHEMA: "false"
+      CHROMA_PERSIST_DIRECTORY: /app/data/chroma
+      FRONTEND_ORIGIN: http://127.0.0.1:8080
+      AUTO_CREATE_SCHEMA: "false"
+    volumes:
+      - backend_data:/app/data
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  backend_data:

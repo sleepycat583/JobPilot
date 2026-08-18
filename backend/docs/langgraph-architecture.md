@@ -14,6 +14,11 @@ POST /threads/{id}/messages
   -> Thread state + sanitized SSE event
 ```
 
+The frontend keeps one SSE connection per thread. Every persisted event carries a
+monotonic event ID, so browser reconnects use `Last-Event-ID` and replay only missed
+events. If the connection is unhealthy, state polling is only a fallback and backs off
+from 5 seconds to a 30-second cap; a successful SSE event or reconnect resets the delay.
+
 The graph uses `langgraph-supervisor.create_supervisor`. Custom handoff tools require exactly one tool call and checkpoint the routing worker, confidence, and short reason. Routing audit data stays in the LangGraph checkpoint and is never included in SSE payloads.
 
 ## State ownership
@@ -55,6 +60,14 @@ cannot be invoked twice in the same run.
 
 LangSmith tracing is controlled by `LANGSMITH_TRACING`, `LANGSMITH_PROJECT`, and the local `LANGSMITH_API_KEY` (or OAuth-managed environment). The application injects these settings into the process before graph construction. Do not place credentials in `.env.example`, logs, traces, plans, or commits.
 
+Every graph invocation uses the same trace metadata contract (`career-workbench.trace.v1`):
+
+- `app_thread_id`, `run_id`, `operation`, and `trace_schema_version` are safe correlation fields.
+- tags identify the application, topology, and operation (`conversation_turn`, `recovery_inspection`, or `recovery_resume`).
+- user messages, resume contents, JD source text, model payloads, and credentials are never copied into custom metadata.
+
+The application still relies on LangChain/LangGraph's normal model and graph spans for end-to-end debugging. The API persists raw user input for conversation continuity, but assistant messages and SSE payloads are sanitized; `worker_result`, route audit details, and tool calls remain checkpoint/trace data.
+
 Run the synthetic live route evaluation from the backend directory after local authentication:
 
 ```powershell
@@ -64,6 +77,17 @@ Run the synthetic live route evaluation from the backend directory after local a
 The evaluator prints only case IDs and selected Worker names. It currently covers eleven
 cases, including context references, interview continuation, ambiguous requests, and
 smalltalk.
+
+Run the offline quality contract evaluator without any model credentials:
+
+```powershell
+.\.venv\Scripts\python.exe -u .\scripts\evaluate_quality.py
+```
+
+This evaluator checks the route dataset shape, mutually exclusive Worker action sets,
+state ownership, one-worker graph execution for every Worker, and output-envelope
+sanitization. It is a deterministic contract baseline, not a substitute for the live
+semantic route evaluation above.
 
 ## Recovery
 

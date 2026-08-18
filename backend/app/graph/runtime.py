@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.graph.state import CareerGraphState
+from app.core.observability import build_trace_config
 from app.models import JDRecord, ResumeRecord, ThreadRecord
 from app.services.conversation_actions import ConversationActionService, ConversationActionOutcome
 from app.services.store import append_event, load_thread_state, loads, save_thread_state, utc_iso
@@ -53,13 +54,8 @@ class LangGraphRuntime:
         for thread_id in thread_ids:
             self.spawn(self._recover_thread(thread_id))
 
-    def _config(self, thread_id: str, run_id: str) -> dict[str, Any]:
-        return {
-            "configurable": {"thread_id": thread_id},
-            "metadata": {"app_thread_id": thread_id, "run_id": run_id},
-            "tags": ["career-workbench", "supervisor-worker"],
-            "recursion_limit": 30,
-        }
+    def _config(self, thread_id: str, run_id: str, *, operation: str = "conversation_turn") -> dict[str, Any]:
+        return build_trace_config(thread_id, run_id, operation=operation)
 
     def _readonly_context(self, thread_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -153,13 +149,20 @@ class LangGraphRuntime:
                 "",
             )
         try:
-            snapshot = await asyncio.to_thread(self.graph.get_state, self._config(thread_id, run_id))
+            snapshot = await asyncio.to_thread(
+                self.graph.get_state,
+                self._config(thread_id, run_id, operation="recovery_inspection"),
+            )
             values = snapshot.values if snapshot else {}
             if values.get("run_id") == run_id:
                 if values.get("worker_name") and values.get("public_output"):
                     await self._handle_graph_result(thread_id, run_id, latest_content, values)
                     return
-                result = await asyncio.to_thread(self.graph.invoke, None, self._config(thread_id, run_id))
+                result = await asyncio.to_thread(
+                    self.graph.invoke,
+                    None,
+                    self._config(thread_id, run_id, operation="recovery_resume"),
+                )
                 await self._handle_graph_result(thread_id, run_id, latest_content, result)
                 return
             if latest_content:

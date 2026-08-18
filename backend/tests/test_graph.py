@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from app.core.config import Settings, configure_langsmith
+from app.core.observability import TRACE_SCHEMA_VERSION, build_trace_config
 from app.graph import build_career_graph, build_model_bundle
 from app.graph.builder import WORKER_DESCRIPTIONS
 from app.graph.models import ModelBundle, StubSupervisorModel
@@ -55,6 +56,31 @@ def test_worker_and_output_nodes_respect_state_ownership() -> None:
     assert set(update).issubset(WORKER_WRITABLE_FIELDS)
     assert set(output_update) == {"public_output"}
     assert output_update["public_output"] == "用户可见结果"
+
+
+def test_sanitizer_extracts_public_field_and_hides_internal_envelope() -> None:
+    output = sanitize_output(
+        {"visible_output": '{"action":"run_match","message":"匹配分析已完成。","worker_result":{"secret":true}}'}
+    )
+    assert output["public_output"] == "匹配分析已完成。"
+    blocked = sanitize_output({"visible_output": '{"tool_calls":[{"name":"transfer_to_match_worker"}]}'})
+    assert blocked["public_output"] == "暂时无法生成有效结果，请稍后重试。"
+    unknown = sanitize_output({"visible_output": '{"internal":"not-for-users"}'})
+    assert unknown["public_output"] == "暂时无法生成有效结果，请稍后重试。"
+    fenced = sanitize_output({"visible_output": '```json\n{"message":"已完成分析"}\n```'})
+    assert fenced["public_output"] == "已完成分析"
+
+
+def test_trace_config_contains_only_non_content_metadata() -> None:
+    config = build_trace_config("thread-123", "run-456", operation="conversation_turn")
+    assert config["metadata"] == {
+        "app_thread_id": "thread-123",
+        "run_id": "run-456",
+        "operation": "conversation_turn",
+        "trace_schema_version": TRACE_SCHEMA_VERSION,
+    }
+    assert "content" not in str(config["metadata"])
+    assert config["run_name"] == "career.conversation_turn"
 
 
 def test_supervisor_post_hook_prevents_second_handoff_after_worker_returns() -> None:

@@ -47,3 +47,15 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 已验证 `PostgresSaver.from_conn_string()` 和 `.setup()` 在当前 Python 3.11、LangGraph
 checkpoint 依赖组合下可导入。当前工作区没有运行中的 PostgreSQL，因此尚未声称已经完成
 真实数据库连接、迁移和多实例压测；这些属于下一阶段的部署验证任务。
+
+有 PostgreSQL 环境后，可以使用下面的命令执行受控 smoke 验证。默认只读检查 schema；首次
+部署需要建表时显式加 `--setup`：
+
+```powershell
+cd backend
+$env:CHECKPOINT_BACKEND = "postgres"
+$env:GRAPH_CHECKPOINT_DATABASE_URL = "postgresql://user:password@host:5432/career"
+uv run python scripts/check_postgres_checkpoint.py --setup
+```
+
+命令只输出成功/失败摘要，不输出数据库连接串；它会验证 checkpoint 的 schema、写入和读取。

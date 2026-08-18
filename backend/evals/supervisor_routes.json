@@ -1,0 +1,75 @@
+[
+  {
+    "id": "resume_parse",
+    "expected_worker": "resume_worker",
+    "history": [],
+    "message": "请解析我上传的简历，提取工作经历、项目和技能。"
+  },
+  {
+    "id": "resume_rewrite_context",
+    "expected_worker": "resume_worker",
+    "history": [
+      {"role": "user", "content": "这是我的后端开发简历。"},
+      {"role": "assistant", "content": "已读取当前简历。"}
+    ],
+    "message": "把其中的项目经历改成更清晰的 STAR 表达。"
+  },
+  {
+    "id": "jd_parse",
+    "expected_worker": "jd_worker",
+    "history": [],
+    "message": "分析这份职位描述，整理岗位职责、硬性要求和加分项。"
+  },
+  {
+    "id": "jd_followup",
+    "expected_worker": "jd_worker",
+    "history": [
+      {"role": "user", "content": "我刚提交了一份数据工程师 JD。"},
+      {"role": "assistant", "content": "已经选择该职位描述。"}
+    ],
+    "message": "它最看重哪些技术能力？"
+  },
+  {
+    "id": "match_direct",
+    "expected_worker": "match_worker",
+    "history": [],
+    "message": "比较当前简历和这个岗位的匹配度，说明优势、证据和缺口。"
+  },
+  {
+    "id": "match_referential",
+    "expected_worker": "match_worker",
+    "history": [
+      {"role": "user", "content": "刚才那个后端岗位已经解析好了。"},
+      {"role": "assistant", "content": "当前简历和 JD 都已选择。"}
+    ],
+    "message": "那我和它匹配吗？"
+  },
+  {
+    "id": "interview_start",
+    "expected_worker": "interview_worker",
+    "history": [],
+    "message": "针对当前岗位开始模拟面试，先问我第一题。"
+  },
+  {
+    "id": "interview_continue",
+    "expected_worker": "interview_worker",
+    "history": [
+      {"role": "assistant", "content": "请介绍一次你解决线上故障的经历。"},
+      {"role": "user", "content": "我先定位日志，再回滚版本并补充监控。"},
+      {"role": "assistant", "content": "本题反馈已经生成。"}
+    ],
+    "message": "继续下一题。"
+  },
+  {
+    "id": "chat_smalltalk",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "你好，今天状态怎么样？"
+  },
+  {
+    "id": "chat_ambiguous",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "我现在有点迷茫，下一步应该做什么？"
+  }
+]

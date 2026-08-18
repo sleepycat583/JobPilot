@@ -114,6 +114,8 @@ def test_supervisor_prompt_enforces_route_only_boundary() -> None:
     assert "不能回答用户问题" in SUPERVISOR_PROMPT
     assert "且只调用一个" in SUPERVISOR_PROMPT
     assert "不设置阈值" in SUPERVISOR_PROMPT
+    assert "即使资料缺失" in SUPERVISOR_PROMPT
+    assert "明确结束面试" in SUPERVISOR_PROMPT
 
 
 def test_supervisor_receives_active_interview_routing_context() -> None:

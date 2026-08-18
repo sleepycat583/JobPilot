@@ -71,6 +71,23 @@ def main() -> int:
             all(case["expected_worker"] in WORKER_DESCRIPTIONS for case in cases),
         ),
         _check(
+            "route dataset categories agree with expected workers",
+            all(case.get("category") == case["expected_worker"] for case in cases),
+        ),
+        _check(
+            "route dataset gives every worker at least four semantic cases",
+            all(sum(case["expected_worker"] == worker for case in cases) >= 4 for worker in WORKER_DESCRIPTIONS),
+        ),
+        _check(
+            "route dataset cases contain a non-empty message and history",
+            all(
+                isinstance(case.get("message"), str)
+                and case["message"].strip()
+                and isinstance(case.get("history"), list)
+                for case in cases
+            ),
+        ),
+        _check(
             "worker action boundaries match design",
             all(ALLOWED_ACTIONS[name] == EXPECTED_ACTIONS[name] for name in WORKER_DESCRIPTIONS),
         ),

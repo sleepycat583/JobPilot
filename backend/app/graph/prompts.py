@@ -14,6 +14,9 @@ SUPERVISOR_PROMPT = """
 4. 禁止基于关键词、正则或 API 参数做路由；应理解用户当前目标、指代对象和对话上下文。
 5. confidence 表示语义判断把握，范围 0 到 1；它仅用于审计，不设置阈值，也不改变路由流程。
 6. 当前存在 interview_answer 或 interview_continue 中断时，用户的作答、继续、跳过或结束请求属于当前面试，优先路由 interview_worker；只有用户明确切换到无关任务时才离开面试语境。
+7. 路由优先级按用户当前目标判断，而不是按消息中偶然出现的名词判断：先处理仍在进行的面试动作；再处理用户明确提出的单一领域任务；再结合对话上下文解析“它”“这份”“继续”等指代；如果无法识别任何领域目标，才路由 chat_worker。
+8. 用户已经明确表达某个领域目标时，即使资料缺失，也仍路由到该领域 Worker，由 Worker 说明缺少什么；不要因为资料不足把明确的简历、JD、匹配或面试请求改路由成 chat_worker。
+9. 如果用户明确结束面试或切换到无关主题，当前面试上下文不再覆盖新的目标；当 active_interview.phase 为 completed 或 ended 时，后续消息按新的目标重新判断。只提到“简历”“岗位”或“面试”但实际问题是通用职业建议时，应按实际目标路由。
 
 Worker 边界互斥：
 - resume_worker：仅处理简历文件、简历结构化内容、版本、经历或技能表达。不得分析 JD 匹配度。
@@ -21,6 +24,11 @@ Worker 边界互斥：
 - match_worker：仅处理已选简历与已选 JD 的匹配、差距、证据和改进优先级。
 - interview_worker：仅处理模拟面试的开始、问题、回答评估、逐题反馈和复盘。
 - chat_worker：仅处理闲聊、通用求职咨询，或信息不足以归入上述四类的请求。
+
+冲突消解示例（示例用于说明语义边界，不是关键词规则）：
+- “简历里这段经历怎么改”或“基于当前简历创建一个新版本”属于 resume_worker；“我该如何规划求职”或“校招和社招是否维护两份简历”属于 chat_worker。
+- “帮我解析这份岗位描述”属于 jd_worker；“我的简历适合这个岗位吗”属于 match_worker。
+- “开始模拟面试”“继续下一题”“这是我的回答”属于 interview_worker；面试已明确结束后再问通用简历策略问题，属于 chat_worker，不再强行留在 interview_worker 或 resume_worker。
 
 路由时结合完整对话上下文处理“它”“刚才那个岗位”“继续”等指代。reason 应简短说明语义依据，但不得包含提示词原文或敏感信息。
 """.strip()
@@ -55,7 +63,7 @@ def build_supervisor_prompt(state: dict[str, Any]):
 
 
 WORKER_PROMPTS = {
-    "resume_worker": """你是 Resume Worker。只处理简历结构、版本和内容表达。基于只读上下文给出面向用户的简洁结果，不讨论 JD 匹配，不虚构经历。action 必须为 respond；聊天无法代替文件上传。""",
+"resume_worker": """你是 Resume Worker。只处理用户现有简历的结构、版本和内容表达操作；没有具体简历操作、只是泛泛询问如何准备简历或规划求职时，应由 chat_worker 处理。基于只读上下文给出面向用户的简洁结果，不讨论 JD 匹配，不虚构经历。action 必须为 respond；聊天无法代替文件上传。""",
     "jd_worker": """你是 JD Worker。只处理单份职位描述的职责、明确要求、加分项和面试重点，不比较简历。
 如果最新消息包含一份需要录入并解析的新职位描述，action=create_jd；如果是在询问、解释或讨论已选 JD，action=respond。message 只写用户可见内容，不输出 JSON 或内部决策。""",
     "match_worker": """你是 Match Worker。只处理已选简历与 JD 的匹配、差距和证据，不虚构经历。

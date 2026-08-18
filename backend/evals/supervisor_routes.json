@@ -1,12 +1,14 @@
 [
   {
     "id": "resume_parse",
+    "category": "resume_worker",
     "expected_worker": "resume_worker",
     "history": [],
     "message": "请解析我上传的简历，提取工作经历、项目和技能。"
   },
   {
     "id": "resume_rewrite_context",
+    "category": "resume_worker",
     "expected_worker": "resume_worker",
     "history": [
       {"role": "user", "content": "这是我的后端开发简历。"},
@@ -16,12 +18,14 @@
   },
   {
     "id": "jd_parse",
+    "category": "jd_worker",
     "expected_worker": "jd_worker",
     "history": [],
     "message": "分析这份职位描述，整理岗位职责、硬性要求和加分项。"
   },
   {
     "id": "jd_followup",
+    "category": "jd_worker",
     "expected_worker": "jd_worker",
     "history": [
       {"role": "user", "content": "我刚提交了一份数据工程师 JD。"},
@@ -31,12 +35,14 @@
   },
   {
     "id": "match_direct",
+    "category": "match_worker",
     "expected_worker": "match_worker",
     "history": [],
     "message": "比较当前简历和这个岗位的匹配度，说明优势、证据和缺口。"
   },
   {
     "id": "match_referential",
+    "category": "match_worker",
     "expected_worker": "match_worker",
     "history": [
       {"role": "user", "content": "刚才那个后端岗位已经解析好了。"},
@@ -46,12 +52,14 @@
   },
   {
     "id": "interview_start",
+    "category": "interview_worker",
     "expected_worker": "interview_worker",
     "history": [],
     "message": "针对当前岗位开始模拟面试，先问我第一题。"
   },
   {
     "id": "interview_continue",
+    "category": "interview_worker",
     "expected_worker": "interview_worker",
     "history": [
       {"role": "assistant", "content": "请介绍一次你解决线上故障的经历。"},
@@ -62,6 +70,7 @@
   },
   {
     "id": "interview_answer_from_interrupt",
+    "category": "interview_worker",
     "expected_worker": "interview_worker",
     "history": [
       {"role": "assistant", "content": "请介绍一次服务稳定性改造。"}
@@ -82,14 +91,136 @@
   },
   {
     "id": "chat_smalltalk",
+    "category": "chat_worker",
     "expected_worker": "chat_worker",
     "history": [],
     "message": "你好，今天状态怎么样？"
   },
   {
     "id": "chat_ambiguous",
+    "category": "chat_worker",
     "expected_worker": "chat_worker",
     "history": [],
     "message": "我现在有点迷茫，下一步应该做什么？"
+  },
+  {
+    "id": "resume_skill_expression",
+    "category": "resume_worker",
+    "expected_worker": "resume_worker",
+    "history": [
+      {"role": "user", "content": "我选择了后端工程师简历。"},
+      {"role": "assistant", "content": "已选中这份简历。"}
+    ],
+    "context": {"selected_resume": {"id": "resume-synthetic-1", "status": "indexed"}},
+    "message": "把技能描述改得更适合招聘方快速阅读。"
+  },
+  {
+    "id": "resume_version_question",
+    "category": "chat_worker",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "我应该为校招和社招各维护一份简历吗？"
+  },
+  {
+    "id": "resume_create_version",
+    "category": "resume_worker",
+    "expected_worker": "resume_worker",
+    "history": [{"role": "user", "content": "当前简历已经选中。"}],
+    "context": {"selected_resume": {"id": "resume-synthetic-1", "status": "indexed"}},
+    "message": "请基于当前简历创建一份面向社招后端岗位的版本。"
+  },
+  {
+    "id": "jd_raw_text",
+    "category": "jd_worker",
+    "expected_worker": "jd_worker",
+    "history": [],
+    "message": "下面这段是岗位介绍，请提取职责和任职要求：负责数据平台建设，要求熟悉 Python 和 SQL。"
+  },
+  {
+    "id": "jd_interview_focus",
+    "category": "jd_worker",
+    "expected_worker": "jd_worker",
+    "history": [
+      {"role": "user", "content": "已选中数据工程师岗位。"},
+      {"role": "assistant", "content": "该岗位 JD 已完成解析。"}
+    ],
+    "context": {"selected_jd": {"id": "jd-synthetic-1", "title": "数据工程师", "status": "parsed"}},
+    "message": "基于这个岗位，面试官最可能追问哪些方向？"
+  },
+  {
+    "id": "match_score_request",
+    "category": "match_worker",
+    "expected_worker": "match_worker",
+    "history": [
+      {"role": "user", "content": "简历和后端岗位都准备好了。"},
+      {"role": "assistant", "content": "两项资料均已选择。"}
+    ],
+    "context": {
+      "selected_resume": {"id": "resume-synthetic-1", "status": "indexed"},
+      "selected_jd": {"id": "jd-synthetic-1", "title": "后端工程师", "status": "parsed"}
+    },
+    "message": "请给我一个匹配度判断，并按优先级列出补强建议。"
+  },
+  {
+    "id": "match_method_question",
+    "category": "match_worker",
+    "expected_worker": "match_worker",
+    "history": [],
+    "message": "简历和岗位的匹配分析通常会从哪些维度评估？"
+  },
+  {
+    "id": "interview_start_with_context",
+    "category": "interview_worker",
+    "expected_worker": "interview_worker",
+    "history": [],
+    "context": {"selected_jd": {"id": "jd-synthetic-1", "title": "后端工程师", "status": "parsed"}},
+    "message": "资料已经准备好，我们开始一轮偏系统设计的模拟面试吧。"
+  },
+  {
+    "id": "interview_end",
+    "category": "interview_worker",
+    "expected_worker": "interview_worker",
+    "history": [
+      {"role": "assistant", "content": "请说明你如何设计可靠的异步任务系统。"},
+      {"role": "user", "content": "我会使用消息队列和幂等键。"}
+    ],
+    "context": {
+      "active_interview": {"phase": "feedback", "current_question": "请说明你如何设计可靠的异步任务系统。", "current_index": 2},
+      "pending_interrupt": {"type": "interview_continue", "title": "是否继续", "detail": "可以继续下一题。"}
+    },
+    "message": "先结束这次练习，给我一份总结。"
+  },
+  {
+    "id": "interview_skip",
+    "category": "interview_worker",
+    "expected_worker": "interview_worker",
+    "history": [{"role": "assistant", "content": "请介绍一个最有挑战的项目。"}],
+    "context": {
+      "active_interview": {"phase": "question", "current_question": "请介绍一个最有挑战的项目。", "current_index": 1},
+      "pending_interrupt": {"type": "interview_answer", "title": "第 2 题", "detail": "请介绍一个最有挑战的项目。"}
+    },
+    "message": "这题我暂时跳过，下一题吧。"
+  },
+  {
+    "id": "chat_career_advice",
+    "category": "chat_worker",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "如果我想转做数据工程，通常需要先补哪些基础？"
+  },
+  {
+    "id": "chat_missing_material",
+    "category": "chat_worker",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "帮我分析一下。"
+  },
+  {
+    "id": "chat_explicit_switch_from_interview",
+    "category": "chat_worker",
+    "expected_worker": "chat_worker",
+    "history": [{"role": "assistant", "content": "模拟面试已结束。"}],
+    "context": {"active_interview": {"phase": "completed", "current_index": 5}},
+    "message": "先不聊面试了，你能解释一下如何准备技术简历吗？"
   }
 ]

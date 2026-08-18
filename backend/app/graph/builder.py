@@ -9,11 +9,11 @@ from app.graph.workers import build_worker_graph, finalize_supervisor_step
 
 
 WORKER_DESCRIPTIONS: dict[WorkerName, str] = {
-    "resume_worker": "Route only resume structure, resume versions, experience, projects, or skill-expression requests.",
-    "jd_worker": "Route only requests about parsing one job description and its requirements.",
-    "match_worker": "Route only resume-to-JD comparison, evidence, strengths, gaps, and match analysis.",
-    "interview_worker": "Route only mock interview questions, answer evaluation, feedback, and review.",
-    "chat_worker": "Route smalltalk, general career advice, and requests that lack enough information for another worker.",
+    "resume_worker": "Route only operations on the user's resume content, structure, versions, experience, projects, or skill expression. Generic career advice about preparing a resume, with no request to change an existing resume, belongs to chat. If a concrete resume operation is clear but the file is missing, still route here.",
+    "jd_worker": "Route only the goal to parse or explain one job description's responsibilities, requirements, skills, or interview focus. If the JD is missing, still route here when that goal is clear.",
+    "match_worker": "Route only the goal to compare a resume with a job description, explain evidence, strengths, gaps, score, or priorities. If materials are missing, still route here when comparison is explicit.",
+    "interview_worker": "Route only the goal to start, continue, answer, skip, evaluate, or review a mock interview. An explicit switch away from a completed or ended interview takes precedence.",
+    "chat_worker": "Route smalltalk, general career advice, or messages whose actual goal cannot be assigned to one of the four domain workers. Do not use chat merely because a clearly requested domain task lacks a resource.",
 }
 
 

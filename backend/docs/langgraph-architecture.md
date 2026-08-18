@@ -74,9 +74,19 @@ Run the synthetic live route evaluation from the backend directory after local a
 .\.venv\Scripts\python.exe -u .\scripts\evaluate_supervisor_routes.py
 ```
 
-The evaluator prints only case IDs and selected Worker names. It currently covers eleven
-cases, including context references, interview continuation, ambiguous requests, and
-smalltalk.
+The evaluator prints only synthetic case IDs and selected Worker names. It currently covers
+more than twenty cases across all five Workers, including context references, interview
+continuation or explicit exits, missing-domain resources, ambiguous requests, and smalltalk.
+It is a live semantic acceptance gate: by default it requires overall exact-route accuracy of
+at least 0.90, at least 0.80 for every expected Worker, and zero invalid tool calls. These are
+evaluation gates only; `confidence` remains audit data and does not alter runtime routing.
+
+The command accepts stricter thresholds when releasing a prompt change and can write a
+sanitized aggregate report without case text:
+
+```powershell
+.\.venv\Scripts\python.exe -u .\scripts\evaluate_supervisor_routes.py --min-overall-accuracy 0.95 --min-worker-accuracy 0.90 --json-output .\output\supervisor-route-report.json
+```
 
 Run the offline quality contract evaluator without any model credentials:
 

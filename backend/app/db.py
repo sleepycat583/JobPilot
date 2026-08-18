@@ -4,7 +4,7 @@ from fastapi import Request
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.core.config import Settings
+from app.core.config import Settings, normalize_database_url
 
 
 class Base(DeclarativeBase):
@@ -12,10 +12,12 @@ class Base(DeclarativeBase):
 
 
 def build_engine(settings: Settings) -> Engine:
-    connect_args = {"check_same_thread": False, "timeout": 5} if settings.database_url.startswith("sqlite") else {}
-    engine = create_engine(settings.database_url, connect_args=connect_args)
+    database_url = normalize_database_url(settings.database_url)
+    connect_args = {"check_same_thread": False, "timeout": 5} if database_url.startswith("sqlite") else {}
+    engine_kwargs = {"pool_pre_ping": True} if not database_url.startswith("sqlite") else {}
+    engine = create_engine(database_url, connect_args=connect_args, **engine_kwargs)
 
-    if settings.database_url.startswith("sqlite"):
+    if database_url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
         def set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
             cursor = dbapi_connection.cursor()

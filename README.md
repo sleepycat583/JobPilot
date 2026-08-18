@@ -84,6 +84,9 @@ Checkpoint 也支持显式切换到 PostgreSQL：设置 `CHECKPOINT_BACKEND=post
 `GRAPH_CHECKPOINT_DATABASE_URL`。配置错误不会回退到 SQLite；首次建表由
 `AUTO_CREATE_CHECKPOINT_SCHEMA` 控制。详细迁移边界见 `backend/docs/production-storage.md`。
 
+业务库的 PostgreSQL URL 会统一使用 Psycopg 3 驱动；迁移完成后可运行
+`backend/scripts/check_postgres_database.py` 验证连接和核心表。
+
 PostgreSQL 环境准备好后，可运行 `backend/scripts/check_postgres_checkpoint.py --setup`
 验证 checkpoint schema、写入和读取；命令不会输出连接串。
 

@@ -42,6 +42,16 @@ PostgreSQL 使用 `langgraph-checkpoint-postgres==2.0.21`，与当前锁定的
 4. 后台任务与 SSE 事件需要共享任务/事件存储，并重新验证 worker 并发和恢复语义。
 5. 完成上述迁移并通过回归后，才可以把 Uvicorn worker 数量从 1 调高。
 
+业务库使用 Psycopg 3 方言。`postgres://...` 和 `postgresql://...` 会在应用和 Alembic
+入口统一规范化为 `postgresql+psycopg://...`，不依赖已废弃的 psycopg2 驱动。完成
+`alembic upgrade head` 后，可以运行：
+
+```powershell
+uv run python scripts/check_postgres_database.py
+```
+
+该命令验证连接和六张核心业务表，并且不会输出数据库连接信息。
+
 ## 当前验证范围
 
 已验证 `PostgresSaver.from_conn_string()` 和 `.setup()` 在当前 Python 3.11、LangGraph

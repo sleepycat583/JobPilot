@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.core.config import get_settings
+from app.core.config import get_settings, normalize_database_url
 from app.db import Base
 from app import models  # noqa: F401
 
@@ -13,7 +13,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 settings = get_settings()
 settings.upload_dir.parent.mkdir(parents=True, exist_ok=True)
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", normalize_database_url(settings.database_url))
 target_metadata = Base.metadata
 
 

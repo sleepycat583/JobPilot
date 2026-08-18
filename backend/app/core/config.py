@@ -50,6 +50,16 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def normalize_database_url(database_url: str) -> str:
+    """Use the installed Psycopg 3 driver for PostgreSQL SQLAlchemy URLs."""
+
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url[len("postgres://") :]
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url[len("postgresql://") :]
+    return database_url
+
+
 def configure_langsmith(settings: Settings) -> None:
     """Expose tracing settings to LangChain without ever logging credential values."""
 

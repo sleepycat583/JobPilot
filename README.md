@@ -127,4 +127,26 @@ uv run python scripts/evaluate_quality.py
 uv run python scripts/evaluate_supervisor_routes.py  # 需要 LLM_MODE=openai 和本地认证
 ```
 
+## 本地数据备份与恢复
+
+个人电脑单实例使用 SQLite、SqliteSaver、本地上传目录和本地 Chroma。停止后端后，可从
+`backend` 目录创建可恢复备份：
+
+```powershell
+uv run python scripts/manage_local_data.py backup --output ..\career-agent-backup.zip
+uv run python scripts/manage_local_data.py restore --input ..\career-agent-backup.zip --force
+```
+
+恢复前请关闭后端；`--force` 会先保留旧数据为 `.pre-restore-*`，不会静默删除。任务失败时，
+前端可根据任务错误的 `retryable` 字段显示重试操作，后端接口为
+`POST /api/jobs/{job_id}/retry`，同样要求 `Idempotency-Key`。
+
+本地历史清理默认只预览，需显式传入 `--apply` 才会删除超过保留期的终态任务、SSE 事件和
+幂等记录；不会删除简历、JD、对话、上传文件或向量：
+
+```powershell
+uv run python scripts/maintain_local_data.py
+uv run python scripts/maintain_local_data.py --apply --retention-days 30
+```
+
 Supervisor 只做语义路由，Worker 生成业务结果，Output Sanitizer 是唯一用户输出出口。详细状态所有权和恢复流程见 `backend/docs/langgraph-architecture.md`。API 层不包含关键词或正则意图路由。

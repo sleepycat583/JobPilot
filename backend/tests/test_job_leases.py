@@ -6,7 +6,7 @@ from threading import Barrier
 from app.core.config import Settings
 from app.db import Base, build_engine, build_session_factory
 from app.models import JobRecord
-from app.services.store import claim_job, update_job
+from app.services.store import claim_job, reset_running_jobs_for_local_recovery, update_job
 
 
 def _factory(tmp_path: Path):
@@ -93,5 +93,30 @@ def test_concurrent_claim_has_exactly_one_winner(tmp_path: Path) -> None:
         with ThreadPoolExecutor(max_workers=2) as executor:
             outcomes = list(executor.map(attempt, ["worker-a", "worker-b"]))
         assert sorted(outcomes) == [False, True]
+    finally:
+        engine.dispose()
+
+
+def test_local_recovery_requeues_running_jobs(tmp_path: Path) -> None:
+    engine, session_factory = _factory(tmp_path)
+    try:
+        with session_factory() as session:
+            session.add(
+                JobRecord(
+                    id="job-recovery",
+                    kind="resume_parse",
+                    status="running",
+                    progress=55,
+                    lease_owner="old-process",
+                )
+            )
+            session.commit()
+            assert reset_running_jobs_for_local_recovery(session) == 1
+        with session_factory() as session:
+            job = session.get(JobRecord, "job-recovery")
+            assert job is not None
+            assert job.status == "queued"
+            assert job.lease_owner is None
+            assert job.lease_expires_at is None
     finally:
         engine.dispose()

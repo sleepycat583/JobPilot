@@ -17,7 +17,7 @@ warnings.filterwarnings(
 
 from app.api.routes import events, health, interviews, jds, jobs, matches, resumes, threads
 from app.core.checkpoint import initialize_checkpoint, open_checkpoint
-from app.core.config import configure_langsmith, get_settings
+from app.core.config import configure_langsmith, get_settings, validate_startup_settings
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
 from app.services.blob_store import build_blob_store
@@ -28,6 +28,7 @@ from app.services.vector_store import VectorStore
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    validate_startup_settings(settings)
     configure_langsmith(settings)
     app_blob_store = build_blob_store(settings)
     engine = build_engine(settings)

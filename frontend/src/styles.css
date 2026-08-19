@@ -134,6 +134,29 @@ input:focus-visible {
   cursor: pointer;
 }
 
+.upload-progress.failed {
+  border-color: #d7a7a0;
+  background: #fff8f6;
+}
+
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: #175c67;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  padding: 4px 0;
+}
+
+.text-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .new-chat-button {
   min-height: 40px;
   margin: 4px 14px 14px;

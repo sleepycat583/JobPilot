@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     object_storage_prefix: str = "career-agent"
     frontend_origin: str = "http://127.0.0.1:5173"
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
+    sse_poll_interval_seconds: float = Field(default=0.5, ge=0.2, le=5.0)
+    sse_replay_batch_size: int = Field(default=100, ge=1, le=1_000)
+    local_history_retention_days: int = Field(default=30, ge=1, le=3_650)
     mock_task_delay_seconds: float = Field(default=0.15, ge=0.01, le=3.0)
     job_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
@@ -85,3 +88,29 @@ def configure_langsmith(settings: Settings) -> None:
         api_key = settings.langsmith_api_key.get_secret_value().strip()
         if api_key:
             os.environ["LANGSMITH_API_KEY"] = api_key
+
+
+def validate_startup_settings(settings: Settings) -> None:
+    """Fail fast on unsafe or incomplete local runtime configuration.
+
+    The application still supports shared production backends. These checks only
+    enforce that a selected backend has the settings it needs before creating
+    clients or accepting requests.
+    """
+
+    errors: list[str] = []
+    if settings.upload_storage_backend == "s3" and not settings.object_storage_bucket:
+        errors.append("OBJECT_STORAGE_BUCKET is required when UPLOAD_STORAGE_BACKEND=s3")
+    if settings.checkpoint_backend == "postgres" and not settings.graph_checkpoint_database_url:
+        errors.append("GRAPH_CHECKPOINT_DATABASE_URL is required when CHECKPOINT_BACKEND=postgres")
+    if settings.chroma_backend == "http" and not settings.chroma_host:
+        errors.append("CHROMA_HOST is required when CHROMA_BACKEND=http")
+    if settings.llm_mode == "openai" and (
+        settings.openai_api_key is None or not settings.openai_api_key.get_secret_value().strip()
+    ):
+        errors.append("OPENAI_API_KEY is required when LLM_MODE=openai")
+    if settings.max_upload_bytes < 1_024:
+        errors.append("MAX_UPLOAD_BYTES must be at least 1024")
+
+    if errors:
+        raise RuntimeError("启动配置无效：" + "；".join(errors))

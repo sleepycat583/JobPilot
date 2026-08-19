@@ -46,7 +46,13 @@ async def thread_events(
         yield "retry: 2000\n\n"
         while not await request.is_disconnected():
             with request.app.state.session_factory() as session:
-                records = events_after(session, stream_type="thread", stream_id=thread_id, after_id=cursor)
+                records = events_after(
+                    session,
+                    stream_type="thread",
+                    stream_id=thread_id,
+                    after_id=cursor,
+                    limit=request.app.state.settings.sse_replay_batch_size,
+                )
                 for record in records:
                     cursor = record.id
                     yield _sse(event_id=record.id, event=record.event_type, data=loads(record.payload_json, {}))
@@ -54,7 +60,7 @@ async def thread_events(
             if now - heartbeat_at >= request.app.state.settings.sse_heartbeat_seconds:
                 yield _sse(comment="heartbeat")
                 heartbeat_at = now
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(request.app.state.settings.sse_poll_interval_seconds)
 
     return StreamingResponse(
         stream(),

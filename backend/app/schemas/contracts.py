@@ -25,6 +25,10 @@ class JobAccepted(BaseModel):
     status_url: str
 
 
+class JobRetryAccepted(JobAccepted):
+    """Response for re-queueing a failed local background task."""
+
+
 class JobRead(BaseModel):
     id: str
     kind: str

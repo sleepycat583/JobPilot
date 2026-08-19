@@ -50,6 +50,7 @@ export const api = {
   getJD: (jdId: string) => request<JDRead>(`/api/jds/${jdId}`),
   createJD: (text: string, key = newIdempotencyKey()) => request<JobAccepted>('/api/jds', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify({ text }) }),
   getJob: (jobId: string) => request<JobRead>(`/api/jobs/${jobId}`),
+  retryJob: (jobId: string, key = newIdempotencyKey()) => request<JobAccepted>(`/api/jobs/${jobId}/retry`, { method: 'POST', headers: { 'Idempotency-Key': key } }),
   createMatch: (body: { thread_id: string; resume_id: string; jd_id: string; strict: boolean }, key = newIdempotencyKey()) => request('/api/matches', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
   startInterview: (body: { thread_id: string; resume_id: string; jd_id: string; interview_type: string; question_count: number; feedback_mode: string }, key = newIdempotencyKey()) => request('/api/interviews', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
 }
@@ -61,7 +62,7 @@ export async function pollJob(jobId: string, onUpdate?: (job: JobRead) => void):
     const job = await api.getJob(jobId)
     onUpdate?.(job)
     if (job.status === 'completed') return job
-    if (job.status === 'failed') throw new ApiError(job.error?.message ?? '后台任务失败', 500, job.error?.code ?? 'JOB_FAILED', false)
+    if (job.status === 'failed') throw new ApiError(job.error?.message ?? '后台任务失败', 500, job.error?.code ?? 'JOB_FAILED', job.error?.retryable ?? false)
     await new Promise((resolve) => window.setTimeout(resolve, delay))
     delay = Math.min(Math.round(delay * 1.7), 3_000)
   }

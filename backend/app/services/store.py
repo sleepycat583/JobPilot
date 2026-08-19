@@ -87,6 +87,7 @@ def events_after(
     stream_type: str,
     stream_id: str,
     after_id: int,
+    limit: int | None = None,
 ) -> list[ExecutionEventRecord]:
     statement = (
         select(ExecutionEventRecord)
@@ -97,7 +98,22 @@ def events_after(
         )
         .order_by(ExecutionEventRecord.id)
     )
+    if limit is not None:
+        statement = statement.limit(limit)
     return list(session.scalars(statement))
+
+
+def reset_running_jobs_for_local_recovery(session: Session) -> int:
+    """Put jobs left running by a stopped local process back in the queue."""
+
+    statement = (
+        update(JobRecord)
+        .where(JobRecord.status == "running")
+        .values(status="queued", lease_owner=None, lease_expires_at=None)
+    )
+    result = session.execute(statement)
+    session.commit()
+    return int(result.rowcount or 0)
 
 
 def update_job(

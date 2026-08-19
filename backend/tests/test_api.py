@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.api.routes.events import _sse
-from app.models import ExecutionEventRecord, ThreadRecord
+from app.models import ExecutionEventRecord, JobRecord, ThreadRecord
 from app.services.llm_tasks import (
     InterviewFeedback,
     InterviewQuestion,
@@ -80,6 +80,32 @@ def test_health_and_openapi(client: TestClient) -> None:
     assert client.get("/api/health/live").json() == {"status": "ok"}
     assert client.get("/api/health/ready").json() == {"status": "ready"}
     assert "/api/resumes" in client.get("/openapi.json").json()["paths"]
+    assert "/api/jobs/{job_id}/retry" in client.get("/openapi.json").json()["paths"]
+
+
+def test_failed_job_can_be_retried_idempotently(client: TestClient) -> None:
+    response = client.post(
+        "/api/resumes",
+        headers=key(),
+        files={"file": ("resume.txt", b"retryable resume", "text/plain")},
+    )
+    body = response.json()
+    assert wait_for_job(client, body["job_id"])["status"] == "completed"
+    with client.app.state.session_factory() as session:
+        job = session.get(JobRecord, body["job_id"])
+        assert job is not None
+        job.status = "failed"
+        job.error_code = "RESUME_MODEL_FAILED"
+        job.error_message = "temporary"
+        session.add(job)
+        session.commit()
+    retry_headers = key()
+    retried = client.post(f"/api/jobs/{body['job_id']}/retry", headers=retry_headers)
+    assert retried.status_code == 202
+    repeated = client.post(f"/api/jobs/{body['job_id']}/retry", headers=retry_headers)
+    assert repeated.status_code == 202
+    assert repeated.json() == retried.json()
+    assert wait_for_job(client, body["job_id"])["status"] == "completed"
 
 
 def test_readiness_reports_uninitialized_app(client: TestClient) -> None:

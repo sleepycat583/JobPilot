@@ -15,7 +15,16 @@ from app.models import JDRecord, JobRecord, ResumeRecord, ThreadRecord
 from app.services.blob_store import BlobStore, build_blob_store
 from app.services.documents import DocumentExtractionError, extract_document_text, make_text_chunks
 from app.services.llm_tasks import LLMTaskService, normalize_source_text
-from app.services.store import append_event, claim_job, load_thread_state, loads, save_thread_state, update_job, utc_iso
+from app.services.store import (
+    append_event,
+    claim_job,
+    load_thread_state,
+    loads,
+    reset_running_jobs_for_local_recovery,
+    save_thread_state,
+    update_job,
+    utc_iso,
+)
 from app.services.vector_store import VectorIndexNotFound, VectorStore
 
 
@@ -53,6 +62,15 @@ class TaskRuntime:
 
     async def recover_pending_jobs(self) -> None:
         with self.session_factory() as session:
+            # This runtime is the single owner of local SQLite/local-file data.
+            # Clear leases left by a previous process before claiming work so a
+            # restart does not wait for the distributed lease timeout.
+            if (
+                self.settings.upload_storage_backend == "local"
+                and self.settings.checkpoint_backend == "sqlite"
+                and self.settings.chroma_backend == "local"
+            ):
+                reset_running_jobs_for_local_recovery(session)
             jobs = list(session.scalars(select(JobRecord).where(JobRecord.status.in_(["queued", "running"]))))
         for job in jobs:
             if job.kind == "resume_parse":

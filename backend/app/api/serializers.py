@@ -3,10 +3,21 @@ from app.schemas.contracts import ErrorDetail, JDRead, JobRead, ResumeRead
 from app.services.store import loads
 
 
+RETRYABLE_JOB_ERRORS = {
+    "RESUME_MODEL_FAILED",
+    "RESUME_INDEX_FAILED",
+    "JD_MODEL_FAILED",
+}
+
+
 def serialize_job(record: JobRecord) -> JobRead:
     error = None
     if record.error_code:
-        error = ErrorDetail(code=record.error_code, message=record.error_message or "任务执行失败", retryable=False)
+        error = ErrorDetail(
+            code=record.error_code,
+            message=record.error_message or "任务执行失败",
+            retryable=record.error_code in RETRYABLE_JOB_ERRORS,
+        )
     return JobRead(
         id=record.id,
         kind=record.kind,

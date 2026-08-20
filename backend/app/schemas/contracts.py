@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 JobStatus = Literal["queued", "running", "completed", "failed"]
-ThreadStatus = Literal["idle", "running", "interrupted", "completed", "failed"]
+ThreadStatus = Literal["idle", "running", "interrupted", "completed", "failed", "cancelled"]
 
 
 class ErrorDetail(BaseModel):
@@ -65,6 +65,29 @@ class JDRead(BaseModel):
     parsed: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class MatchReportRead(BaseModel):
+    id: str
+    thread_id: str
+    resume_id: str
+    jd_id: str
+    strict: bool
+    result: dict[str, Any]
+    created_at: datetime
+
+
+class InterviewHistoryRead(BaseModel):
+    id: str
+    thread_id: str
+    resume_id: str
+    jd_id: str
+    interview_type: str
+    question_count: int
+    overall_score: float | None = None
+    result: dict[str, Any]
+    created_at: datetime
+    completed_at: datetime
 
 
 class MessageItem(BaseModel):

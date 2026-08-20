@@ -1,18 +1,40 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
 from app.api.helpers import cached_body, require_idempotency_key
+from app.api.serializers import serialize_match_report
 from app.db import get_db
-from app.models import JDRecord, ResumeRecord, ThreadRecord
-from app.schemas.contracts import MatchCreate, RunAccepted
+from app.models import JDRecord, MatchReportRecord, ResumeRecord, ThreadRecord
+from app.schemas.contracts import MatchCreate, MatchReportRead, RunAccepted
 from app.services.idempotency import hash_request, store_response
 from app.services.store import load_thread_state, save_thread_state
 
 
 router = APIRouter(prefix="/matches", tags=["matches"])
+
+
+@router.get("", response_model=list[MatchReportRead])
+def list_match_reports(
+    thread_id: str | None = None,
+    limit: int = 20,
+    session: Session = Depends(get_db),
+) -> list[MatchReportRead]:
+    statement = select(MatchReportRecord).order_by(MatchReportRecord.created_at.desc()).limit(max(1, min(limit, 100)))
+    if thread_id:
+        statement = statement.where(MatchReportRecord.thread_id == thread_id)
+    return [serialize_match_report(item) for item in session.scalars(statement)]
+
+
+@router.get("/{report_id}", response_model=MatchReportRead)
+def get_match_report(report_id: str, session: Session = Depends(get_db)) -> MatchReportRead:
+    record = session.get(MatchReportRecord, report_id)
+    if record is None:
+        raise api_error(404, "MATCH_REPORT_NOT_FOUND", "匹配报告不存在。")
+    return serialize_match_report(record)
 
 
 @router.post("", response_model=RunAccepted, status_code=202)
@@ -38,7 +60,7 @@ async def create_match(
     if cached:
         response.status_code = cached[0]
         return RunAccepted.model_validate(cached[1])
-    if state.get("status") == "running":
+    if state.get("status") in {"running", "interrupted"}:
         raise api_error(409, "THREAD_BUSY", "当前会话正在执行其他任务。", retryable=True)
     run_id = str(uuid4())
     state.update({

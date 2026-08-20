@@ -13,6 +13,7 @@ type WorkspaceValue = {
   setSelectedResumeId: (id: string) => void
   setSelectedJDId: (id: string) => void
   refreshState: () => Promise<unknown>
+  cancelActiveRun: () => Promise<ThreadState>
 }
 
 const WorkspaceContext = createContext<WorkspaceValue | null>(null)
@@ -65,8 +66,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setSseHealthy(true)
       setSseRetryDelay(5_000)
       void queryClient.invalidateQueries({ queryKey: ['thread-state', threadId] })
+      void queryClient.invalidateQueries({ queryKey: ['match-reports', threadId] })
+      void queryClient.invalidateQueries({ queryKey: ['interview-history', threadId] })
     }
-    const events = ['node_started', 'message_completed', 'run_completed', 'run_failed', 'interrupt_required', 'run_resumed']
+    const events = ['node_started', 'message_completed', 'run_completed', 'run_failed', 'run_cancelled', 'interrupt_required', 'run_resumed']
     events.forEach((name) => source.addEventListener(name, refresh))
     source.onopen = () => {
       setSseHealthy(true)
@@ -89,7 +92,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setSelectedResumeId,
     setSelectedJDId,
     refreshState: () => stateQuery.refetch(),
-  }), [bootstrap.error, bootstrap.isLoading, selectedJDId, selectedResumeId, stateQuery, threadId])
+    cancelActiveRun: async () => {
+      if (!threadId) throw new Error('会话尚未准备好')
+      const next = await api.cancelThread(threadId)
+      queryClient.setQueryData(['thread-state', threadId], next)
+      return next
+    },
+  }), [bootstrap.error, bootstrap.isLoading, queryClient, selectedJDId, selectedResumeId, stateQuery, threadId])
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>
 }

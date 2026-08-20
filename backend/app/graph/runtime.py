@@ -201,7 +201,7 @@ class LangGraphRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
-            if state.get("active_run_id") not in (None, run_id):
+            if state.get("status") == "cancelled" or state.get("active_run_id") not in (None, run_id):
                 return
             message = {
                 "id": str(uuid4()),
@@ -258,7 +258,7 @@ class LangGraphRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
-            if state.get("active_run_id") not in (None, run_id):
+            if state.get("status") == "cancelled" or state.get("active_run_id") not in (None, run_id):
                 return
             state["messages"].append(
                 {"id": str(uuid4()), "role": "assistant", "content": cleaned, "created_at": utc_iso()}
@@ -309,7 +309,7 @@ class LangGraphRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
-            if state.get("active_run_id") not in (None, run_id):
+            if state.get("status") == "cancelled" or state.get("active_run_id") not in (None, run_id):
                 return
             state["status"] = "failed"
             state["task"] = {

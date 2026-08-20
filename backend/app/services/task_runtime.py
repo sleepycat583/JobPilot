@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.models import JDRecord, JobRecord, ResumeRecord, ThreadRecord
+from app.models import InterviewRecord, JDRecord, JobRecord, MatchReportRecord, ResumeRecord, ThreadRecord
 from app.services.blob_store import BlobStore, build_blob_store
 from app.services.documents import DocumentExtractionError, extract_document_text, make_text_chunks
 from app.services.llm_tasks import LLMTaskService, normalize_source_text
@@ -278,6 +278,8 @@ class TaskRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
+            if state.get("status") == "cancelled":
+                return
             score = 54.0 if strict else 72.5
             result = {
                 "total_score": score,
@@ -294,6 +296,7 @@ class TaskRuntime:
                 "low_score_review_required": strict,
             }
             state["match_result"] = result
+            self._save_match_report(session, thread_id, run_id, state, result, strict)
             if strict:
                 interrupt_id = str(uuid4())
                 state["status"] = "interrupted"
@@ -347,6 +350,8 @@ class TaskRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
+            if state.get("status") == "cancelled":
+                return
             resume = session.get(ResumeRecord, state.get("selected_resume_id")) if state.get("selected_resume_id") else None
             jd = session.get(JDRecord, state.get("selected_jd_id")) if state.get("selected_jd_id") else None
             if resume is None or jd is None:
@@ -392,6 +397,8 @@ class TaskRuntime:
                 if thread is None:
                     return
                 state = load_thread_state(thread)
+                if state.get("status") == "cancelled":
+                    return
                 state["status"] = "failed"
                 state["task"] = {"status": "failed", "title": "匹配分析失败", "detail": "简历尚未完成向量索引，请等待索引任务完成后重试。", "steps": []}
                 save_thread_state(session, thread, state)
@@ -404,6 +411,8 @@ class TaskRuntime:
                 if thread is None:
                     return
                 state = load_thread_state(thread)
+                if state.get("status") == "cancelled":
+                    return
                 state["status"] = "failed"
                 state["task"] = {"status": "failed", "title": "匹配分析失败", "detail": "模型未能生成可靠的匹配结果，请稍后重试。", "steps": []}
                 save_thread_state(session, thread, state)
@@ -419,7 +428,10 @@ class TaskRuntime:
             if thread is None:
                 return
             state = load_thread_state(thread)
+            if state.get("status") == "cancelled":
+                return
             state["match_result"] = result_data
+            self._save_match_report(session, thread_id, run_id, state, result_data, strict)
             if should_interrupt:
                 interrupt_id = str(uuid4())
                 state["status"] = "interrupted"
@@ -651,6 +663,19 @@ class TaskRuntime:
                 ).model_dump(mode="json")
             except Exception as exc:
                 raise ValueError("模型未能生成面试复盘，请稍后重试。") from exc
+        record = session.get(InterviewRecord, str(interview["run_id"]))
+        if record is None:
+            record = InterviewRecord(
+                id=str(interview["run_id"]),
+                thread_id=thread.id,
+                resume_id=str(state.get("selected_resume_id") or ""),
+                jd_id=str(state.get("selected_jd_id") or ""),
+                interview_type=str(interview.get("interview_type", "综合面试")),
+                question_count=int(interview.get("question_count", 0)),
+            )
+        record.overall_score = float((interview.get("report") or {}).get("overall_score", 0))
+        record.result_json = json.dumps(interview, ensure_ascii=False)
+        session.add(record)
         state["pending_interrupt"] = None
         state["status"] = "completed"
         state["task"] = {
@@ -666,6 +691,28 @@ class TaskRuntime:
         save_thread_state(session, thread, state)
         append_event(session, stream_type="thread", stream_id=thread.id, event_type="run_completed", data={"kind": "interview"})
         return state
+
+    def _save_match_report(
+        self,
+        session: Session,
+        thread_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        result: dict[str, Any],
+        strict: bool,
+    ) -> None:
+        record = session.get(MatchReportRecord, run_id)
+        if record is None:
+            record = MatchReportRecord(
+                id=run_id,
+                thread_id=thread_id,
+                resume_id=str(state.get("selected_resume_id") or ""),
+                jd_id=str(state.get("selected_jd_id") or ""),
+                strict=strict,
+            )
+        record.result_json = json.dumps(result, ensure_ascii=False)
+        record.strict = strict
+        session.add(record)
 
     @staticmethod
     def _interview_materials(

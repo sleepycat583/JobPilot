@@ -46,6 +46,29 @@ export type JobRead = {
 
 export type JobAccepted = { job_id: string; resource_id: string | null; status: string; status_url: string }
 
+export type MatchReportHistory = {
+  id: string
+  thread_id: string
+  resume_id: string
+  jd_id: string
+  strict: boolean
+  result: MatchResult
+  created_at: string
+}
+
+export type InterviewHistory = {
+  id: string
+  thread_id: string
+  resume_id: string
+  jd_id: string
+  interview_type: string
+  question_count: number
+  overall_score: number | null
+  result: InterviewState
+  created_at: string
+  completed_at: string
+}
+
 export type ResumeRead = {
   id: string
   version: number

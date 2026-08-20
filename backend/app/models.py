@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -88,3 +88,32 @@ class IdempotencyRecord(Base):
     status_code: Mapped[int] = mapped_column(Integer)
     response_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MatchReportRecord(Base):
+    __tablename__ = "match_reports"
+    __table_args__ = (Index("ix_match_reports_thread_created", "thread_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(36), index=True)
+    resume_id: Mapped[str] = mapped_column(String(36), index=True)
+    jd_id: Mapped[str] = mapped_column(String(36), index=True)
+    strict: Mapped[bool] = mapped_column(Boolean, default=False)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class InterviewRecord(Base):
+    __tablename__ = "interview_records"
+    __table_args__ = (Index("ix_interview_records_thread_created", "thread_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(36), index=True)
+    resume_id: Mapped[str] = mapped_column(String(36), index=True)
+    jd_id: Mapped[str] = mapped_column(String(36), index=True)
+    interview_type: Mapped[str] = mapped_column(String(32))
+    question_count: Mapped[int] = mapped_column(Integer)
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -2364,3 +2364,57 @@ input:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.history-strip,
+.history-list,
+.interview-history {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.history-strip > button,
+.history-list > button,
+.interview-history > button {
+  display: grid;
+  min-width: 164px;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--surface-subtle);
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-strip > button.active,
+.history-list > button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.history-strip strong,
+.history-list strong,
+.interview-history strong { font-size: 10px; }
+.history-strip span,
+.history-list span,
+.interview-history span { color: var(--text-faint); font-size: 9px; }
+
+.history-list-heading {
+  display: flex;
+  min-width: 132px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.history-list-heading span { display: inline-flex; align-items: center; gap: 5px; }
+.history-list-heading small { color: var(--text-faint); font-size: 9px; }

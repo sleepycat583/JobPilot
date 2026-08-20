@@ -10,7 +10,7 @@ from app.db import get_db
 from app.models import JDRecord, ResumeRecord, ThreadRecord
 from app.schemas.contracts import MessageCreate, ResumeCommand, RunAccepted, ThreadCreated, ThreadState
 from app.services.idempotency import hash_request, store_response
-from app.services.store import dumps, initial_thread_state, load_thread_state, save_thread_state, utc_iso
+from app.services.store import append_event, dumps, initial_thread_state, load_thread_state, save_thread_state, utc_iso
 
 
 router = APIRouter(prefix="/threads", tags=["threads"])
@@ -56,6 +56,35 @@ def create_thread(
 @router.get("/{thread_id}/state", response_model=ThreadState)
 def get_thread_state(thread_id: str, session: Session = Depends(get_db)) -> ThreadState:
     return ThreadState.model_validate(load_thread_state(_thread_or_404(session, thread_id)))
+
+
+@router.post("/{thread_id}/cancel", response_model=ThreadState)
+def cancel_thread(
+    thread_id: str,
+    request: Request,
+    response: Response,
+    idempotency_key: str = Depends(require_idempotency_key),
+    session: Session = Depends(get_db),
+) -> ThreadState:
+    thread = _locked_thread_or_404(session, thread_id)
+    request_hash = hash_request(b"cancel-thread-v1", thread_id.encode())
+    cached = cached_body(session, scope=f"thread:{thread_id}:cancel", key=idempotency_key, request_hash=request_hash)
+    if cached:
+        response.status_code = cached[0]
+        return ThreadState.model_validate(cached[1])
+    state = load_thread_state(thread)
+    if state.get("status") not in {"running", "interrupted"}:
+        raise api_error(409, "THREAD_NOT_ACTIVE", "当前会话没有可取消的任务。")
+    state["status"] = "cancelled"
+    state["task"] = {"status": "cancelled", "title": "任务已取消", "detail": "本轮任务已停止，资料不会被删除。", "steps": []}
+    state.pop("active_run_id", None)
+    state.pop("conversation_action", None)
+    state["pending_interrupt"] = None
+    save_thread_state(session, thread, state)
+    append_event(session, stream_type="thread", stream_id=thread_id, event_type="run_cancelled", data={"message": "任务已取消"})
+    body = ThreadState.model_validate(state)
+    store_response(session, scope=f"thread:{thread_id}:cancel", key=idempotency_key, request_hash=request_hash, status_code=200, body=body.model_dump(mode="json"))
+    return body
 
 
 @router.post("/{thread_id}/messages", response_model=RunAccepted, status_code=202)

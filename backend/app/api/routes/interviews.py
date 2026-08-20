@@ -1,16 +1,38 @@
 from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
 from app.api.helpers import cached_body, require_idempotency_key
+from app.api.serializers import serialize_interview_history
 from app.db import get_db
-from app.models import JDRecord, ResumeRecord, ThreadRecord
-from app.schemas.contracts import InterviewCreate, RunAccepted
+from app.models import InterviewRecord, JDRecord, ResumeRecord, ThreadRecord
+from app.schemas.contracts import InterviewCreate, InterviewHistoryRead, RunAccepted
 from app.services.idempotency import hash_request, store_response
 from app.services.store import load_thread_state
 
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
+
+
+@router.get("", response_model=list[InterviewHistoryRead])
+def list_interview_history(
+    thread_id: str | None = None,
+    limit: int = 20,
+    session: Session = Depends(get_db),
+) -> list[InterviewHistoryRead]:
+    statement = select(InterviewRecord).order_by(InterviewRecord.completed_at.desc()).limit(max(1, min(limit, 100)))
+    if thread_id:
+        statement = statement.where(InterviewRecord.thread_id == thread_id)
+    return [serialize_interview_history(item) for item in session.scalars(statement)]
+
+
+@router.get("/{interview_id}", response_model=InterviewHistoryRead)
+def get_interview_history(interview_id: str, session: Session = Depends(get_db)) -> InterviewHistoryRead:
+    record = session.get(InterviewRecord, interview_id)
+    if record is None:
+        raise api_error(404, "INTERVIEW_HISTORY_NOT_FOUND", "面试记录不存在。")
+    return serialize_interview_history(record)
 
 
 @router.post("", response_model=RunAccepted, status_code=202)
@@ -25,6 +47,8 @@ def create_interview(
     if thread is None:
         raise api_error(404, "THREAD_NOT_FOUND", "会话不存在。")
     state = load_thread_state(thread)
+    if state.get("status") in {"running", "interrupted"}:
+        raise api_error(409, "THREAD_BUSY", "当前会话正在执行其他任务。", retryable=True)
     resume_id = payload.resume_id or state.get("selected_resume_id")
     jd_id = payload.jd_id or state.get("selected_jd_id")
     if not resume_id or session.get(ResumeRecord, resume_id) is None:

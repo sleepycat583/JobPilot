@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
@@ -54,13 +54,18 @@ async def upload_resume(
     except Exception as exc:
         raise api_error(503, "UPLOAD_STORAGE_UNAVAILABLE", "文件存储暂时不可用，请稍后重试。", retryable=True) from exc
     digest = hash_request(content)
+    display_name = Path(file.filename or "简历").stem
+    latest_version = session.scalar(
+        select(func.max(ResumeRecord.version)).where(ResumeRecord.display_name == display_name)
+    ) or 0
     resume = ResumeRecord(
         id=resume_id,
-        display_name=Path(file.filename or "简历").stem,
+        display_name=display_name,
         file_name=file.filename or f"resume{suffix}",
         content_type=file.content_type or "application/octet-stream",
         size_bytes=len(content),
         file_sha256=digest,
+        version=int(latest_version) + 1,
         status="processing",
     )
     job = JobRecord(

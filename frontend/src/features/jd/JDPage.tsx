@@ -16,6 +16,7 @@ export function JDPage() {
   const [tab, setTab] = useState<Tab>('summary')
   const [job, setJob] = useState<JobRead | null>(null)
   const [resourceId, setResourceId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const jds = useQuery({ queryKey: ['jds'], queryFn: api.listJDs })
   const selected = jds.data?.find((item) => item.id === selectedJDId) ?? jds.data?.[0]
   useEffect(() => {
@@ -49,7 +50,8 @@ export function JDPage() {
   })
 
   return <div className="page-view jd-view">
-    <div className="page-toolbar"><div><h2>职位描述</h2><p>粘贴完整 JD，分析结果会保存为可复用版本。</p></div><div className="toolbar-buttons"><button className="secondary-button" type="button"><History size={16} />{jds.data?.length ?? 0} 条历史 JD</button><button className="primary-button" type="button" onClick={() => analyze.mutate()} disabled={text.trim().length < 20 || analyze.isPending}>{analyze.isPending ? <LoaderCircle className="spin" size={17} /> : <FileSearch size={17} />}{analyze.isPending ? `分析中 ${job?.progress ?? 0}%` : '开始分析'}</button></div></div>
+    <div className="page-toolbar"><div><h2>职位描述</h2><p>粘贴完整 JD，分析结果会保存为可复用版本。</p></div><div className="toolbar-buttons"><button className="secondary-button" type="button" onClick={() => setHistoryOpen((open) => !open)}><History size={16} />{jds.data?.length ?? 0} 条历史 JD</button><button className="primary-button" type="button" onClick={() => analyze.mutate()} disabled={text.trim().length < 20 || analyze.isPending}>{analyze.isPending ? <LoaderCircle className="spin" size={17} /> : <FileSearch size={17} />}{analyze.isPending ? `分析中 ${job?.progress ?? 0}%` : '开始分析'}</button></div></div>
+    {historyOpen && <div className="history-strip" aria-label="JD 历史记录">{jds.isLoading ? <span>正在加载历史记录...</span> : jds.data?.length ? jds.data.map((item) => <button className={item.id === selected?.id ? 'active' : ''} key={item.id} type="button" onClick={() => { setSelectedJDId(item.id); setText(item.source_text); setHistoryOpen(false) }}><strong>{item.parsed?.job_title ?? item.title}</strong><span>{new Date(item.updated_at).toLocaleDateString('zh-CN')}</span></button>) : <span>还没有已保存的 JD。</span>}</div>}
     <div className="jd-editor-band"><label htmlFor="jd-input">JD 原文</label><textarea id="jd-input" value={text} onChange={(event) => setText(event.target.value)} /><div className="editor-footer"><span>{text.length} 字</span><span>{analyze.error?.message ?? (job?.status === 'failed' ? '分析失败' : '默认不联网补充公司信息')}</span>{job?.status === 'failed' && job.error?.retryable && <button className="text-button" type="button" onClick={() => retry.mutate()} disabled={retry.isPending}>{retry.isPending ? <LoaderCircle className="spin" size={15} /> : '重试分析'}</button>}</div></div>
     <section className="result-section">{selected ? <JDResult jd={selected} tab={tab} setTab={setTab} /> : <EmptyState title="还没有分析结果" detail="输入完整职位描述并开始分析，结果将保存到本地工作区。" />}</section>
   </div>

@@ -208,6 +208,116 @@ def test_low_match_interrupt_can_resume(client: TestClient) -> None:
     assert resumed.json()["pending_interrupt"] is None
 
 
+def test_match_and_interview_history_are_persisted(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    resume_id, jd_id = create_resume(client), create_jd(client)
+    matched = client.post(
+        "/api/matches",
+        headers=key(),
+        json={"thread_id": thread_id, "resume_id": resume_id, "jd_id": jd_id, "strict": False},
+    )
+    assert matched.status_code == 202
+    wait_for_thread(client, thread_id, "completed")
+    reports = client.get(f"/api/matches?thread_id={thread_id}").json()
+    assert len(reports) == 1
+    assert reports[0]["result"]["total_score"] == 72.5
+    assert reports[0]["resume_id"] == resume_id
+
+    started = client.post(
+        "/api/interviews",
+        headers=key(),
+        json={
+            "thread_id": thread_id,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "interview_type": "综合面试",
+            "question_count": 3,
+            "feedback_mode": "final",
+        },
+    )
+    assert started.status_code == 202
+    state = client.get(f"/api/threads/{thread_id}/state").json()
+    finished = client.post(
+        f"/api/threads/{thread_id}/resume",
+        headers=key(),
+        json={"interrupt_id": state["pending_interrupt"]["id"], "action": "end", "payload": {}},
+    )
+    assert finished.status_code == 200
+    history = client.get(f"/api/interviews?thread_id={thread_id}").json()
+    assert len(history) == 1
+    assert history[0]["overall_score"] == 76
+    assert history[0]["result"]["phase"] == "report"
+
+
+def test_active_thread_can_be_cancelled_idempotently(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    resume_id, jd_id = create_resume(client), create_jd(client)
+    started = client.post(
+        "/api/interviews",
+        headers=key(),
+        json={
+            "thread_id": thread_id,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "interview_type": "综合面试",
+            "question_count": 3,
+            "feedback_mode": "each",
+        },
+    )
+    assert started.status_code == 202
+    headers = key()
+    first = client.post(f"/api/threads/{thread_id}/cancel", headers=headers)
+    second = client.post(f"/api/threads/{thread_id}/cancel", headers=headers)
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["status"] == "cancelled"
+
+
+def test_match_is_rejected_while_interview_is_interrupted(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    resume_id, jd_id = create_resume(client), create_jd(client)
+    started = client.post(
+        "/api/interviews",
+        headers=key(),
+        json={
+            "thread_id": thread_id,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "interview_type": "综合面试",
+            "question_count": 3,
+            "feedback_mode": "each",
+        },
+    )
+    assert started.status_code == 202
+
+    match = client.post(
+        "/api/matches",
+        headers=key(),
+        json={"thread_id": thread_id, "resume_id": resume_id, "jd_id": jd_id, "strict": False},
+    )
+    assert match.status_code == 409
+    assert match.json()["error"]["code"] == "THREAD_BUSY"
+
+
+def test_cancelled_thread_is_not_overwritten_by_late_graph_failure(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    with client.app.state.session_factory() as session:
+        thread = session.get(ThreadRecord, thread_id)
+        assert thread is not None
+        state = load_thread_state(thread)
+        state["status"] = "cancelled"
+        state["active_run_id"] = "late-run"
+        save_thread_state(session, thread, state)
+
+    asyncio.run(client.app.state.graph_runtime._finalize_failure(thread_id, "late-run"))
+
+    state = client.get(f"/api/threads/{thread_id}/state").json()
+    assert state["status"] == "cancelled"
+    with client.app.state.session_factory() as session:
+        events = session.query(ExecutionEventRecord).filter_by(stream_id=thread_id).all()
+    assert not any(event.event_type == "run_failed" for event in events)
+
+
 def test_interview_answer_feedback_and_next_question(client: TestClient) -> None:
     thread_id = create_thread(client)
     resume_id, jd_id = create_resume(client), create_jd(client)

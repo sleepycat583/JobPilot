@@ -1,4 +1,4 @@
-import type { JDRead, JobAccepted, JobRead, ResumeRead, ThreadState } from '../../shared/types'
+import type { InterviewHistory, JDRead, JobAccepted, JobRead, MatchReportHistory, ResumeRead, ThreadState } from '../../shared/types'
 
 type ApiErrorBody = { error?: { code?: string; message?: string; retryable?: boolean } }
 
@@ -39,6 +39,7 @@ export const api = {
   getThreadState: (threadId: string) => request<ThreadState>(`/api/threads/${threadId}/state`),
   sendMessage: (threadId: string, body: { content: string; resume_id?: string; jd_id?: string }, key = newIdempotencyKey()) => request(`/api/threads/${threadId}/messages`, { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
   resumeThread: (threadId: string, body: { interrupt_id: string; action: string; payload?: Record<string, unknown> }, key = newIdempotencyKey()) => request<ThreadState>(`/api/threads/${threadId}/resume`, { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify({ ...body, payload: body.payload ?? {} }) }),
+  cancelThread: (threadId: string, key = newIdempotencyKey()) => request<ThreadState>(`/api/threads/${threadId}/cancel`, { method: 'POST', headers: { 'Idempotency-Key': key } }),
   listResumes: () => request<ResumeRead[]>('/api/resumes'),
   getResume: (resumeId: string) => request<ResumeRead>(`/api/resumes/${resumeId}`),
   uploadResume: (file: File, key = newIdempotencyKey()) => {
@@ -52,7 +53,9 @@ export const api = {
   getJob: (jobId: string) => request<JobRead>(`/api/jobs/${jobId}`),
   retryJob: (jobId: string, key = newIdempotencyKey()) => request<JobAccepted>(`/api/jobs/${jobId}/retry`, { method: 'POST', headers: { 'Idempotency-Key': key } }),
   createMatch: (body: { thread_id: string; resume_id: string; jd_id: string; strict: boolean }, key = newIdempotencyKey()) => request('/api/matches', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
+  listMatchReports: (threadId: string) => request<MatchReportHistory[]>(`/api/matches?thread_id=${encodeURIComponent(threadId)}`),
   startInterview: (body: { thread_id: string; resume_id: string; jd_id: string; interview_type: string; question_count: number; feedback_mode: string }, key = newIdempotencyKey()) => request('/api/interviews', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
+  listInterviewHistory: (threadId: string) => request<InterviewHistory[]>(`/api/interviews?thread_id=${encodeURIComponent(threadId)}`),
 }
 
 export async function pollJob(jobId: string, onUpdate?: (job: JobRead) => void): Promise<JobRead> {

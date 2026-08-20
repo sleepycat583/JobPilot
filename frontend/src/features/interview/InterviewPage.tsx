@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, FileText, LoaderCircle, Mic2, RefreshCw, Send } from 'lucide-react'
+import { CheckCircle2, Circle, Clock3, FileText, LoaderCircle, Mic2, RefreshCw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useWorkspace } from '../../app/WorkspaceProvider'
 import { api } from '../../lib/api/client'
-import type { InterviewState } from '../../shared/types'
+import type { InterviewHistory, InterviewState } from '../../shared/types'
 import { SectionTitle } from '../../shared/ui'
 
 export function InterviewPage() {
@@ -11,6 +11,7 @@ export function InterviewPage() {
   const { threadId, state, selectedResumeId, selectedJDId, setSelectedResumeId, setSelectedJDId } = useWorkspace()
   const resumes = useQuery({ queryKey: ['resumes'], queryFn: api.listResumes })
   const jds = useQuery({ queryKey: ['jds'], queryFn: api.listJDs })
+  const history = useQuery({ queryKey: ['interview-history', threadId], queryFn: () => api.listInterviewHistory(threadId!), enabled: Boolean(threadId) })
   const [interviewType, setInterviewType] = useState<'综合面试' | '技术专项' | '项目深挖'>('综合面试')
   const [feedbackMode, setFeedbackMode] = useState<'each' | 'final'>('each')
   const [questionCount, setQuestionCount] = useState(5)
@@ -21,23 +22,29 @@ export function InterviewPage() {
 
   const start = useMutation({
     mutationFn: () => api.startInterview({ thread_id: threadId!, resume_id: selectedResumeId, jd_id: selectedJDId, interview_type: interviewType, question_count: questionCount, feedback_mode: feedbackMode }),
-    onSuccess: () => { setSetupOverride(false); void queryClient.invalidateQueries({ queryKey: ['thread-state', threadId] }) },
+    onSuccess: () => { setSetupOverride(false); void queryClient.invalidateQueries({ queryKey: ['thread-state', threadId] }); void queryClient.invalidateQueries({ queryKey: ['interview-history', threadId] }) },
   })
   const resume = useMutation({
     mutationFn: ({ action, payload }: { action: string; payload?: Record<string, unknown> }) => api.resumeThread(threadId!, { interrupt_id: state!.pending_interrupt!.id, action, payload }),
-    onSuccess: (next) => { setAnswer(''); queryClient.setQueryData(['thread-state', threadId], next) },
+    onSuccess: (next) => {
+      setAnswer('')
+      queryClient.setQueryData(['thread-state', threadId], next)
+      void queryClient.invalidateQueries({ queryKey: ['interview-history', threadId] })
+    },
   })
   const interview = state?.interview
+  const [historyItem, setHistoryItem] = useState<InterviewHistory | null>(null)
 
-  if (!interview || setupOverride) return <InterviewSetup
+  if (historyItem) return <InterviewReport interview={historyItem.result} onRestart={() => setHistoryItem(null)} historyItem={historyItem} />
+  if (!interview || setupOverride) return <><InterviewSetup
     interviewType={interviewType} setInterviewType={setInterviewType}
     feedbackMode={feedbackMode} setFeedbackMode={setFeedbackMode}
     questionCount={questionCount} setQuestionCount={setQuestionCount}
     resumeId={selectedResumeId} setResumeId={setSelectedResumeId} resumes={resumes.data ?? []}
     jdId={selectedJDId} setJDId={setSelectedJDId} jds={jds.data ?? []}
     onStart={() => start.mutate()} pending={start.isPending} error={start.error?.message}
-  />
-  if (interview.phase === 'report' && interview.report) return <InterviewReport interview={interview} onRestart={() => setSetupOverride(true)} />
+  />{history.data?.length ? <InterviewHistoryList items={history.data} onSelect={setHistoryItem} /> : null}</>
+  if (interview.phase === 'report' && interview.report) return <><InterviewReport interview={interview} onRestart={() => setSetupOverride(true)} />{history.data?.length ? <InterviewHistoryList items={history.data} onSelect={setHistoryItem} /> : null}</>
   return <div className="page-view interview-session">
     <div className="interview-progress"><div><span>{interview.interview_type}</span><strong>第 {interview.current_index + 1} / {interview.question_count} 题</strong></div><div className="progress-track"><span style={{ width: `${(interview.current_index + 1) / interview.question_count * 100}%` }} /></div><button className="text-button danger" type="button" onClick={() => resume.mutate({ action: 'end' })}>结束面试</button></div>
     <div className="question-stage"><div className="question-topic">{interview.current_index < 2 ? '项目经历' : '技术能力'}</div><h2>{interview.current_question}</h2>{interview.phase === 'feedback' && interview.feedback ? <div className="feedback-panel"><div className="feedback-score"><strong>{interview.feedback.score}</strong><span>本题表现</span></div><div><h3>{interview.feedback.title}</h3><p>{interview.feedback.detail}</p><div className="tag-list">{interview.feedback.tags.map((tag, index) => <span key={tag} className={`tag ${index === 0 ? 'required' : index === 1 ? 'preferred' : 'inferred'}`}>{tag}</span>)}</div></div><button className="primary-button" type="button" onClick={() => resume.mutate({ action: 'next' })} disabled={resume.isPending}>下一题</button></div> : <div className="answer-area"><textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="像真实面试一样作答。建议说明背景、行动、结果和你的判断依据。" autoFocus /><div className="answer-footer"><span>{answer.length} 字</span><div><button className="secondary-button" type="button" onClick={() => resume.mutate({ action: 'skip' })}>暂时跳过</button><button className="primary-button" type="button" disabled={!answer.trim() || resume.isPending} onClick={() => resume.mutate({ action: 'submit_answer', payload: { answer } })}>{resume.isPending ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}提交回答</button></div></div></div>}</div>
@@ -80,7 +87,11 @@ const reportDimensionLabels: Record<string, string> = {
   communication: '表达清晰度',
 }
 
-function InterviewReport({ interview, onRestart }: { interview: InterviewState; onRestart: () => void }) {
+function InterviewHistoryList({ items, onSelect }: { items: InterviewHistory[]; onSelect: (item: InterviewHistory) => void }) {
+  return <section className="interview-history"><div className="history-list-heading"><span><Clock3 size={15} />已保存的面试复盘</span><small>{items.length} 条</small></div>{items.map((item) => <button key={item.id} type="button" onClick={() => onSelect(item)}><strong>{item.interview_type} · {item.overall_score ?? '--'} 分</strong><span>{new Date(item.completed_at).toLocaleString('zh-CN')} · 完成 {item.result.records.length} 题</span></button>)}</section>
+}
+
+function InterviewReport({ interview, onRestart, historyItem }: { interview: InterviewState; onRestart: () => void; historyItem?: InterviewHistory }) {
   const report = interview.report!
-  return <div className="page-view report-view"><div className="report-header"><div><span className="eyebrow">模拟面试复盘</span><h2>本轮面试复盘</h2><p className="report-summary">{report.summary || '复盘已生成，请结合具体问题回看自己的回答。'}</p><p className="report-meta">完成 {interview.records.length} 道问题 · {interview.interview_type}</p></div><div className="report-score"><strong>{report.overall_score}</strong><span>/ 100</span></div></div><div className="report-grid"><section><SectionTitle title="维度表现" meta={`${Object.keys(report.dimension_scores).length} 项`} />{Object.entries(report.dimension_scores).map(([name, score]) => <div className="dimension compact" key={name}><div><strong>{reportDimensionLabels[name] ?? name}</strong><span>{score}</span></div><div className="progress-track"><span style={{ width: `${score}%` }} /></div></div>)}</section><section><SectionTitle title="优先改进" meta="行动项" />{report.actions.map((action) => <div className="action-item" key={action}><strong>{action}</strong><p>根据本轮回答补充可验证的项目证据与技术判断。</p></div>)}</section></div><div className="report-actions"><button className="secondary-button" type="button" onClick={onRestart}><RefreshCw size={16} />再练一轮</button><button className="primary-button" type="button"><FileText size={16} />保存复盘</button></div></div>
+  return <div className="page-view report-view"><div className="report-header"><div><span className="eyebrow">{historyItem ? '历史模拟面试复盘' : '模拟面试复盘'}</span><h2>{historyItem ? '已保存的面试复盘' : '本轮面试复盘'}</h2><p className="report-summary">{report.summary || '复盘已生成，请结合具体问题回看自己的回答。'}</p><p className="report-meta">完成 {interview.records.length} 道问题 · {interview.interview_type}</p></div><div className="report-score"><strong>{report.overall_score}</strong><span>/ 100</span></div></div><div className="report-grid"><section><SectionTitle title="维度表现" meta={`${Object.keys(report.dimension_scores).length} 项`} />{Object.entries(report.dimension_scores).map(([name, score]) => <div className="dimension compact" key={name}><div><strong>{reportDimensionLabels[name] ?? name}</strong><span>{score}</span></div><div className="progress-track"><span style={{ width: `${score}%` }} /></div></div>)}</section><section><SectionTitle title="优先改进" meta="行动项" />{report.actions.map((action) => <div className="action-item" key={action}><strong>{action}</strong><p>根据本轮回答补充可验证的项目证据与技术判断。</p></div>)}</section></div><div className="report-actions"><button className="secondary-button" type="button" onClick={onRestart}><RefreshCw size={16} />{historyItem ? '返回当前面试' : '再练一轮'}</button></div></div>
 }

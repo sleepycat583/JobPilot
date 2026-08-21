@@ -2423,6 +2423,11 @@ input:focus-visible {
 .settings-view { display: grid; gap: 16px; max-width: 1120px; }
 .settings-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .settings-heading h2 { margin: 3px 0 0; font-size: 22px; }
+.settings-feedback { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--border); background: var(--surface-subtle); color: var(--text-soft); font-size: 12px; line-height: 1.5; }
+.settings-feedback svg { flex: 0 0 auto; margin-top: 1px; }
+.settings-feedback.success { border-color: #a9d6c7; color: #166c5a; }
+.settings-feedback.info { border-color: #d5c58b; color: #715a16; }
+.settings-feedback.error { border-color: #e3aaa3; color: #a33d32; }
 .settings-band { border: 1px solid var(--border); background: var(--surface); }
 .settings-band-title { display: flex; align-items: flex-start; gap: 10px; padding: 18px 20px 0; color: var(--accent); }
 .settings-band-title h3 { margin: 0; color: var(--text); font-size: 14px; }

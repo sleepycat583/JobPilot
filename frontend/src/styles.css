@@ -2418,3 +2418,59 @@ input:focus-visible {
 
 .history-list-heading span { display: inline-flex; align-items: center; gap: 5px; }
 .history-list-heading small { color: var(--text-faint); font-size: 9px; }
+
+/* Local privacy and data management */
+.settings-view { display: grid; gap: 16px; max-width: 1120px; }
+.settings-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.settings-heading h2 { margin: 3px 0 0; font-size: 22px; }
+.settings-band { border: 1px solid var(--border); background: var(--surface); }
+.settings-band-title { display: flex; align-items: flex-start; gap: 10px; padding: 18px 20px 0; color: var(--accent); }
+.settings-band-title h3 { margin: 0; color: var(--text); font-size: 14px; }
+.settings-band-title p { margin: 4px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.storage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 18px 20px; gap: 0; }
+.storage-grid > div { display: grid; min-width: 0; gap: 5px; padding: 0 16px; border-left: 1px solid var(--border); }
+.storage-grid > div:first-child { padding-left: 0; border-left: 0; }
+.storage-grid span { color: var(--text-faint); font-size: 10px; }
+.storage-grid strong { overflow: hidden; color: var(--text); font-size: 19px; text-overflow: ellipsis; white-space: nowrap; }
+.storage-grid small { min-height: 28px; color: var(--text-soft); font-size: 10px; line-height: 1.4; }
+.settings-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; }
+.settings-grid .settings-band, .cleanup-band { padding: 18px 20px; }
+.settings-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; }
+.settings-action strong, .processing-status strong { font-size: 12px; }
+.settings-action p, .processing-status p, .offline-restore span, .cleanup-modal p { margin: 5px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.55; }
+.offline-restore { display: flex; align-items: flex-start; gap: 7px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--border); color: var(--text-faint); }
+.offline-restore svg { flex: 0 0 auto; margin-top: 1px; }
+.processing-status { display: flex; align-items: flex-start; gap: 9px; margin-top: 16px; padding: 12px; border-left: 3px solid var(--accent); background: var(--surface-subtle); }
+.processing-status.external_model { border-left-color: #b16b27; }
+.cleanup-controls { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+.cleanup-controls label { color: var(--text-soft); font-size: 11px; }
+.cleanup-controls select { min-width: 100px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; padding: 8px 28px 8px 10px; }
+.cleanup-controls .danger { margin-left: auto; color: #a33d32; }
+.cleanup-preview { display: flex; flex-wrap: wrap; gap: 7px 18px; margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 11px; }
+.cleanup-preview strong { color: var(--text); }
+.settings-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 12px; }
+.cleanup-modal { display: grid; gap: 12px; }
+.cleanup-modal > strong { color: #a33d32; font-size: 12px; }
+.cleanup-modal label { color: var(--text-soft); font-size: 11px; }
+.cleanup-modal input { width: 100%; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; padding: 10px; }
+.danger-fill { border-color: #a33d32; background: #a33d32; }
+
+@media (max-width: 820px) {
+  .storage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 0; }
+  .storage-grid > div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .settings-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .settings-view { gap: 12px; }
+  .settings-heading { align-items: center; }
+  .settings-heading h2 { font-size: 18px; }
+  .settings-band-title, .settings-grid .settings-band, .cleanup-band { padding-left: 14px; padding-right: 14px; }
+  .storage-grid { padding: 16px 14px; }
+  .storage-grid > div { padding: 0 10px; }
+  .storage-grid strong { font-size: 16px; }
+  .settings-action { align-items: flex-start; flex-direction: column; }
+  .settings-action .primary-button { width: 100%; }
+  .cleanup-controls { align-items: stretch; flex-wrap: wrap; }
+  .cleanup-controls .danger { margin-left: 0; }
+}

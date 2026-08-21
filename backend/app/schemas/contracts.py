@@ -90,6 +90,43 @@ class InterviewHistoryRead(BaseModel):
     completed_at: datetime
 
 
+class LocalDataCounts(BaseModel):
+    resumes: int = Field(ge=0)
+    job_descriptions: int = Field(ge=0)
+    conversations: int = Field(ge=0)
+    match_reports: int = Field(ge=0)
+    interview_reports: int = Field(ge=0)
+    uploaded_files: int = Field(ge=0)
+
+
+class LocalDataStorage(BaseModel):
+    business_database_bytes: int = Field(ge=0)
+    checkpoint_database_bytes: int = Field(ge=0)
+    uploads_bytes: int = Field(ge=0)
+    vector_index_bytes: int = Field(ge=0)
+
+
+class LocalDataSummary(BaseModel):
+    storage_mode: Literal["local"]
+    model_processing: Literal["local_stub", "external_model"]
+    retention_days: int = Field(ge=1)
+    counts: LocalDataCounts
+    storage: LocalDataStorage
+    restore_requires_shutdown: bool = True
+
+
+class LocalCleanupPreview(BaseModel):
+    retention_days: int = Field(ge=1)
+    terminal_jobs: int = Field(ge=0)
+    idempotency_records: int = Field(ge=0)
+    execution_events: int = Field(ge=0)
+
+
+class LocalCleanupRequest(BaseModel):
+    retention_days: int = Field(ge=1, le=3650)
+    confirmation: Literal["DELETE_LOCAL_HISTORY"]
+
+
 class MessageItem(BaseModel):
     id: str
     role: Literal["user", "assistant"]

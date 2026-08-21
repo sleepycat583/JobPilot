@@ -137,6 +137,8 @@ uv run python scripts/manage_local_data.py backup --output ..\career-agent-backu
 uv run python scripts/manage_local_data.py restore --input ..\career-agent-backup.zip --force
 ```
 
+工作台底部的“更多设置”可进入“隐私与数据”页：查看本地数据规模和模型处理模式、下载一致性备份，以及先预览再确认清理过期的终态任务、幂等记录和 SSE 事件。在线页面不会删除简历、JD、上传文件、面试复盘或向量索引，也不提供运行中替换数据的恢复操作。
+
 恢复前请关闭后端；`--force` 会先保留旧数据为 `.pre-restore-*`，不会静默删除。任务失败时，
 前端可根据任务错误的 `retryable` 字段显示重试操作，后端接口为
 `POST /api/jobs/{job_id}/retry`，同样要求 `Idempotency-Key`。

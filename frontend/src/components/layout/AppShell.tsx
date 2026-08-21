@@ -16,7 +16,7 @@ const navItems = [
   { id: 'match' as const, label: '匹配报告', icon: BarChart3 },
   { id: 'interview' as const, label: '模拟面试', icon: Mic2 },
 ]
-const titles: Record<string, string> = { '/': '对话工作台', '/resumes': '简历库', '/jd': 'JD 分析', '/match': '匹配报告', '/interview': '模拟面试' }
+const titles: Record<string, string> = { '/': '对话工作台', '/resumes': '简历库', '/jd': 'JD 分析', '/match': '匹配报告', '/interview': '模拟面试', '/settings': '隐私与数据' }
 const idleTask: TaskView = { status: 'idle', title: '等待任务', detail: '发送消息后，这里会显示处理进度。', steps: [] }
 
 export function AppShell() {
@@ -44,13 +44,14 @@ export function AppShell() {
 }
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
   return <>
     <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
       <div className="brand"><div className="brand-mark"><BriefcaseBusiness size={20} /></div><div><strong>求职工作台</strong><span>AI Career Workspace</span></div><button className="icon-button sidebar-close" onClick={onClose} aria-label="关闭导航" title="关闭导航"><X size={18} /></button></div>
       <NavLink className="new-chat-button" to="/" onClick={onClose}><Plus size={17} /><span>当前对话</span></NavLink>
       <nav className="main-nav" aria-label="主导航">{navItems.map(({ id, label, icon: Icon }) => <NavLink key={id} to={routes[id]} end={id === 'workbench'} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} onClick={onClose}><Icon size={18} /><span>{label}</span></NavLink>)}</nav>
       <div className="sidebar-history"><div className="section-label-row"><span className="section-label">最近会话</span><button className="icon-button compact" type="button" aria-label="搜索会话" title="搜索会话"><Search size={15} /></button></div><NavLink className="history-item active" to="/"><span>当前求职准备</span><small>今天</small></NavLink></div>
-      <div className="sidebar-footer"><div className="avatar">林</div><div><strong>林同学</strong><span>本地工作区</span></div><button className="icon-button compact" type="button" aria-label="更多设置" title="更多设置"><MoreHorizontal size={17} /></button></div>
+      <div className="sidebar-footer"><div className="avatar">林</div><div><strong>林同学</strong><span>本地工作区</span></div><button className="icon-button compact" type="button" aria-label="更多设置" title="更多设置" onClick={() => { navigate('/settings'); onClose() }}><MoreHorizontal size={17} /></button></div>
     </aside>
     {open && <button className="mobile-scrim" aria-label="关闭导航" onClick={onClose} />}
   </>

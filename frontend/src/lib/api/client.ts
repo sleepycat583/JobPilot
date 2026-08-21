@@ -1,4 +1,4 @@
-import type { InterviewHistory, JDRead, JobAccepted, JobRead, MatchReportHistory, ResumeRead, ThreadState } from '../../shared/types'
+import type { InterviewHistory, JDRead, JobAccepted, JobRead, LocalCleanupPreview, LocalDataSummary, MatchReportHistory, ResumeRead, ThreadState } from '../../shared/types'
 
 type ApiErrorBody = { error?: { code?: string; message?: string; retryable?: boolean } }
 
@@ -56,6 +56,27 @@ export const api = {
   listMatchReports: (threadId: string) => request<MatchReportHistory[]>(`/api/matches?thread_id=${encodeURIComponent(threadId)}`),
   startInterview: (body: { thread_id: string; resume_id: string; jd_id: string; interview_type: string; question_count: number; feedback_mode: string }, key = newIdempotencyKey()) => request('/api/interviews', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify(body) }),
   listInterviewHistory: (threadId: string) => request<InterviewHistory[]>(`/api/interviews?thread_id=${encodeURIComponent(threadId)}`),
+  getLocalDataSummary: () => request<LocalDataSummary>('/api/local-data/summary'),
+  getLocalCleanupPreview: (retentionDays: number) => request<LocalCleanupPreview>(`/api/local-data/cleanup-preview?retention_days=${retentionDays}`),
+  cleanupLocalHistory: (retentionDays: number, key = newIdempotencyKey()) => request<LocalCleanupPreview>('/api/local-data/cleanup', { method: 'POST', headers: jsonHeaders(key), body: JSON.stringify({ retention_days: retentionDays, confirmation: 'DELETE_LOCAL_HISTORY' }) }),
+  downloadLocalBackup: async () => {
+    const response = await fetch('/api/local-data/backup', { method: 'POST' })
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as ApiErrorBody
+      throw new ApiError(body.error?.message ?? `请求失败 (${response.status})`, response.status, body.error?.code ?? 'HTTP_ERROR', body.error?.retryable ?? false)
+    }
+    const blob = await response.blob()
+    const href = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const disposition = response.headers.get('content-disposition') ?? ''
+    const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'career-agent-backup.zip'
+    anchor.href = href
+    anchor.download = filename
+    document.body.append(anchor)
+    anchor.click()
+    anchor.remove()
+    window.setTimeout(() => URL.revokeObjectURL(href), 0)
+  },
 }
 
 export async function pollJob(jobId: string, onUpdate?: (job: JobRead) => void): Promise<JobRead> {

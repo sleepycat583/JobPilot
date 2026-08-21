@@ -158,3 +158,31 @@ export type InterviewState = {
     actions: string[]
   }
 }
+
+export type LocalDataSummary = {
+  storage_mode: 'local'
+  model_processing: 'local_stub' | 'external_model'
+  retention_days: number
+  counts: {
+    resumes: number
+    job_descriptions: number
+    conversations: number
+    match_reports: number
+    interview_reports: number
+    uploaded_files: number
+  }
+  storage: {
+    business_database_bytes: number
+    checkpoint_database_bytes: number
+    uploads_bytes: number
+    vector_index_bytes: number
+  }
+  restore_requires_shutdown: boolean
+}
+
+export type LocalCleanupPreview = {
+  retention_days: number
+  terminal_jobs: number
+  idempotency_records: number
+  execution_events: number
+}

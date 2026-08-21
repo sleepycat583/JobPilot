@@ -81,6 +81,45 @@ def test_health_and_openapi(client: TestClient) -> None:
     assert client.get("/api/health/ready").json() == {"status": "ready"}
     assert "/api/resumes" in client.get("/openapi.json").json()["paths"]
     assert "/api/jobs/{job_id}/retry" in client.get("/openapi.json").json()["paths"]
+    assert "/api/local-data/summary" in client.get("/openapi.json").json()["paths"]
+
+
+def test_local_data_summary_backup_and_cleanup_controls(client: TestClient) -> None:
+    create_resume(client)
+    create_jd(client)
+    summary = client.get("/api/local-data/summary")
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["storage_mode"] == "local"
+    assert body["counts"]["resumes"] == 1
+    assert body["counts"]["job_descriptions"] == 1
+    assert body["restore_requires_shutdown"] is True
+    assert "path" not in json.dumps(body).lower()
+
+    preview = client.get("/api/local-data/cleanup-preview?retention_days=30")
+    assert preview.status_code == 200
+    assert preview.json()["retention_days"] == 30
+
+    invalid = client.post("/api/local-data/cleanup", headers=key(), json={"retention_days": 30, "confirmation": "wrong"})
+    assert invalid.status_code == 422
+    headers = key()
+    cleaned = client.post(
+        "/api/local-data/cleanup",
+        headers=headers,
+        json={"retention_days": 30, "confirmation": "DELETE_LOCAL_HISTORY"},
+    )
+    repeated = client.post(
+        "/api/local-data/cleanup",
+        headers=headers,
+        json={"retention_days": 30, "confirmation": "DELETE_LOCAL_HISTORY"},
+    )
+    assert cleaned.status_code == repeated.status_code == 200
+    assert cleaned.json() == repeated.json()
+
+    backup = client.post("/api/local-data/backup")
+    assert backup.status_code == 200
+    assert backup.headers["content-type"].startswith("application/zip")
+    assert backup.content.startswith(b"PK")
 
 
 def test_failed_job_can_be_retried_idempotently(client: TestClient) -> None:

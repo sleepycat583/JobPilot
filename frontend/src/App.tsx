@@ -5,6 +5,7 @@ import { InterviewPage } from './features/interview/InterviewPage'
 import { JDPage } from './features/jd/JDPage'
 import { MatchPage } from './features/match/MatchPage'
 import { ResumePage } from './features/resumes/ResumePage'
+import { SettingsPage } from './features/settings/SettingsPage'
 
 export default function App() {
   return <Routes>
@@ -14,6 +15,7 @@ export default function App() {
       <Route path="jd" element={<JDPage />} />
       <Route path="match" element={<MatchPage />} />
       <Route path="interview" element={<InterviewPage />} />
+      <Route path="settings" element={<SettingsPage />} />
     </Route>
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>

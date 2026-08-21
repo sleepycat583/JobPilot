@@ -15,7 +15,7 @@ warnings.filterwarnings(
     category=LangChainPendingDeprecationWarning,
 )
 
-from app.api.routes import events, health, interviews, jds, jobs, matches, resumes, threads
+from app.api.routes import events, health, interviews, jds, jobs, local_data, matches, resumes, threads
 from app.core.checkpoint import initialize_checkpoint, open_checkpoint
 from app.core.config import configure_langsmith, get_settings, validate_startup_settings
 from app.db import Base, build_engine, build_session_factory
@@ -101,7 +101,7 @@ def create_app() -> FastAPI:
             content={"error": {"code": "VALIDATION_ERROR", "message": message, "retryable": False}},
         )
 
-    for router in (health.router, jobs.router, resumes.router, jds.router, threads.router, events.router, matches.router, interviews.router):
+    for router in (health.router, jobs.router, resumes.router, jds.router, threads.router, events.router, matches.router, interviews.router, local_data.router):
         app.include_router(router, prefix=settings.api_prefix)
     return app
 

@@ -10,6 +10,23 @@ career-agent-workbench/
 └─ backend/    FastAPI + LangGraph + SQLAlchemy + Alembic + SQLite
 ```
 
+## 推荐：Windows 一键启动
+
+个人电脑单实例使用，优先运行仓库根目录下的一键启动器：
+
+```powershell
+.\scripts\local.ps1 -Action start
+```
+
+它会检查 Python/uv/Node.js/npm、创建本地 `.env` 模板、按锁定文件安装依赖、执行迁移，并启动后端和前端。日常检查和停止：
+
+```powershell
+.\scripts\local.ps1 -Action check
+.\scripts\local.ps1 -Action stop
+```
+
+完整的 Windows 前置条件、端口、日志、备份恢复、故障排查和 Docker 单实例说明见 [`docs/local-quickstart.md`](docs/local-quickstart.md)。
+
 ## 启动后端
 
 需要 Python 3.11 和 uv。
@@ -63,9 +80,9 @@ $env:API_PROXY_TARGET = "http://127.0.0.1:8001"
 npm run dev -- --host 127.0.0.1 --port 5174
 ```
 
-## Docker Compose 部署
+## Docker Compose 单实例（可选）
 
-需要 Docker Desktop（包含 Compose）。首次启动前创建本地配置：
+需要 Docker Desktop（包含 Compose）。它适合希望隔离运行环境的本地用户；日常开发优先使用上面的 PowerShell 启动器。首次启动前创建本地配置：
 
 ```powershell
 Copy-Item backend\.env.example backend\.env
@@ -76,6 +93,7 @@ Copy-Item backend\.env.example backend\.env
 启动：
 
 ```powershell
+docker compose config --quiet
 docker compose up --build
 ```
 
@@ -86,6 +104,8 @@ docker compose up --build
 ```powershell
 docker compose down
 ```
+
+详细的容器日志、健康检查和数据卷说明见 [`docs/local-quickstart.md`](docs/local-quickstart.md)。
 
 当前 Compose 配置使用单个后端 worker 和 SQLite，以保证 SqliteSaver、后台任务和本地 Chroma 的进程内一致性。需要多实例或高并发部署时，应先把业务数据库迁移到 Postgres，并将 checkpoint、上传文件和向量库切换到共享持久化方案，再增加 worker 数量。
 

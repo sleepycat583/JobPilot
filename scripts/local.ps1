@@ -135,18 +135,18 @@ function Ensure-LocalEnv {
 function Get-RecordedPid([string]$Path) {
     if (-not (Test-Path $Path)) { return $null }
     $raw = (Get-Content -LiteralPath $Path -Raw).Trim()
-    $pid = 0
-    if (-not [int]::TryParse($raw, [ref]$pid) -or $pid -le 0) {
+    $processId = 0
+    if (-not [int]::TryParse($raw, [ref]$processId) -or $processId -le 0) {
         Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
-    return $pid
+    return $processId
 }
 
 function Get-ManagedProcess([string]$PidFile) {
-    $pid = Get-RecordedPid $PidFile
-    if ($null -eq $pid) { return $null }
-    return Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $processId = Get-RecordedPid $PidFile
+    if ($null -eq $processId) { return $null }
+    return Get-Process -Id $processId -ErrorAction SilentlyContinue
 }
 
 function Get-PortOwner([int]$Port) {
@@ -165,30 +165,30 @@ function Assert-PortAvailable([int]$Port, [string]$ServiceName) {
     Fail "$ServiceName 端口 $Port 已被占用（PID: $pids）。请使用其他端口参数，或先手动停止占用进程；脚本不会结束无关进程。"
 }
 
-function Save-Pid([string]$Path, [int]$Pid) {
+function Save-Pid([string]$Path, [int]$processId) {
     New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
-    Set-Content -LiteralPath $Path -Value ([string]$Pid) -Encoding ascii
+    Set-Content -LiteralPath $Path -Value ([string]$processId) -Encoding ascii
 }
 
-function Stop-ProcessTree([int]$Pid) {
-    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $Pid" -ErrorAction SilentlyContinue)
+function Stop-ProcessTree([int]$processId) {
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $processId" -ErrorAction SilentlyContinue)
     foreach ($child in $children) {
         Stop-ProcessTree ([int]$child.ProcessId)
     }
-    $process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if ($null -ne $process) {
-        Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
-        Write-Info "已停止受脚本管理的进程 PID $Pid。"
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        Write-Info "已停止受脚本管理的进程 PID $processId。"
     }
 }
 
 function Stop-ManagedService([string]$Name, [string]$PidFile) {
-    $pid = Get-RecordedPid $PidFile
-    if ($null -eq $pid) {
+    $processId = Get-RecordedPid $PidFile
+    if ($null -eq $processId) {
         Write-Info "$Name 没有脚本记录的运行进程。"
         return
     }
-    Stop-ProcessTree $pid
+    Stop-ProcessTree $processId
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 

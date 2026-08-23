@@ -32,7 +32,16 @@ gitleaks git -v --redact
 ## 首次公开顺序
 
 1. 备份本地仓库。
-2. 用 `git filter-repo` 清理 `output/` 等敏感历史。
+2. 用 `git filter-repo` 清理 `output/` 等敏感历史：
+
+   ```powershell
+   git clone --mirror . ..\JobPilot-pre-filter-backup.git
+   git filter-repo --path output/ --invert-paths --force
+   git log --all -- output/
+   git fsck --full --no-reflogs
+   ```
+
+   `git log --all -- output/` 应无输出。备份镜像只用于恢复，不得上传。
 3. 重新执行安全扫描、测试和构建。
 4. 在 GitHub 创建空仓库 `JobPilot`，不自动添加 README、License 或 `.gitignore`。
 5. 确认仓库权限中只有项目所有者。

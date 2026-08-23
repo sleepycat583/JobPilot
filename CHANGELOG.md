@@ -1,4 +1,4 @@
-# Changelog
+# JobPilot Changelog
 
 本项目遵循语义化版本号。当前版本：`0.1.0`。
 
@@ -18,4 +18,3 @@
 
 - API Key 仅通过环境变量或本机 OAuth 注入，不写入仓库、日志或发布记录。
 - 默认 `LLM_MODE=stub`，首次本地启动不需要第三方密钥。
-

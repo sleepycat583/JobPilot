@@ -33,6 +33,23 @@ backend/data/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Chroma and local vector stores
+**/chroma/
+**/chroma_db/
+chroma/
+
+# Runtime uploads, backups, and restore staging
+**/uploads/
+*.zip
+*.tar
+*.tar.gz
+.pre-restore-*/
 
 # ── Python 缓存与测试产物 ──────────────────────────────────────
 __pycache__/
@@ -43,12 +60,24 @@ __pycache__/
 .coverage
 htmlcov/
 *.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+coverage.xml
 
 # ── 日志 ──────────────────────────────────────────────────────
 *.log
 logs/
 # 开发时的错误日志（.err 文件通常是临时调试输出）
 *.err
+*.pid
+
+# Credential and certificate files
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
 
 # ── 操作系统垃圾文件 ──────────────────────────────────────────
 .DS_Store

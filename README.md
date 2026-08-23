@@ -1,11 +1,46 @@
-# 求职工作台
+# JobPilot
 
-多智能体 AI 求职助手。当前版本已经接入 LangGraph Supervisor-Worker、SqliteSaver checkpoint、HTTP/SSE 状态同步和 HITL 流程。OpenAI-compatible 模式下，简历与 JD 解析、匹配评分、面试出题、回答评估和复盘均使用经过 Pydantic 校验的真实结构化模型输出；Stub 模式保留确定性结果用于离线回归。
+JobPilot 是多智能体 AI 求职助手。当前版本已经接入 LangGraph Supervisor-Worker、SqliteSaver checkpoint、HTTP/SSE 状态同步和 HITL 流程。OpenAI-compatible 模式下，简历与 JD 解析、匹配评分、面试出题、回答评估和复盘均使用经过 Pydantic 校验的真实结构化模型输出；Stub 模式保留确定性结果用于离线回归。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    UI[React + Vite] --> API[FastAPI]
+    API --> SSE[SSE events]
+    API --> GRAPH[LangGraph Runtime]
+    GRAPH --> SUP[Supervisor<br/>LLM semantic routing only]
+    SUP --> RW[Resume Worker]
+    SUP --> JW[JD Worker]
+    SUP --> MW[Match Worker]
+    SUP --> IW[Interview Worker]
+    SUP --> CW[Chat Worker]
+    RW --> CHROMA[(ChromaDB)]
+    MW --> CHROMA
+    API --> DB[(SQLite + Alembic)]
+    GRAPH --> CP[(SqliteSaver checkpoint)]
+    GRAPH --> SAN[Output Sanitizer]
+    SAN --> SSE
+```
+
+Supervisor 只负责基于对话上下文进行 LLM 语义路由，Worker 负责各自业务动作，Output Sanitizer 是唯一用户可见输出出口。
+
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 前端 | React 19, Vite, React Router, TanStack Query |
+| 后端 | FastAPI, SQLAlchemy, Alembic |
+| 编排 | LangGraph, Supervisor-Worker |
+| 状态持久化 | SQLite, SqliteSaver |
+| 向量库 | ChromaDB 1.5.9 |
+| 可观测性 | LangSmith |
+| 本地运行时 | Python 3.11/3.12, Node.js 20+, uv, npm |
 
 ## 目录
 
 ```text
-career-agent-workbench/
+JobPilot/
 ├─ frontend/   React + Vite + React Router + TanStack Query
 └─ backend/    FastAPI + LangGraph + SQLAlchemy + Alembic + SQLite
 ```
@@ -27,9 +62,11 @@ career-agent-workbench/
 
 完整的 Windows 前置条件、端口、日志、备份恢复、故障排查和 Docker 单实例说明见 [`docs/local-quickstart.md`](docs/local-quickstart.md)。
 
+GitHub 发布前的安全、历史清理和贡献者检查见 [`docs/github-release-checklist.md`](docs/github-release-checklist.md)。
+
 ## 启动后端
 
-需要 Python 3.11 和 uv。
+需要 Python 3.11 或 3.12，以及 uv。
 
 ```powershell
 cd backend
@@ -47,6 +84,14 @@ OpenAPI：`http://127.0.0.1:8000/docs`
 - `GET /api/health/ready`：应用已完成 lifespan 初始化，并可读业务数据库、LangGraph checkpoint、文件存储和（启用时）Chroma。
 
 默认 `LLM_MODE=stub` 会运行完整 LangGraph 拓扑和 checkpoint，但不会假装做语义判断。配置 `LLM_MODE=openai`、`OPENAI_MODEL` 和 `OPENAI_API_KEY` 后启用真实 LLM 路由与业务任务；第三方兼容服务通过 `OPENAI_BASE_URL` 接入。LangSmith Trace 优先在本机通过 OAuth 完成认证，任何真实密钥都不得提交。
+
+### 环境变量最小说明
+
+- 首次本地启动默认使用 `LLM_MODE=stub`，不需要第三方 API Key。
+- 真实模型需要 `LLM_MODE=openai`、`OPENAI_MODEL`、`OPENAI_BASE_URL`（按服务商需要）和 `OPENAI_API_KEY`。
+- LangSmith 使用 `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`；认证优先使用本机 OAuth。
+- 单机默认使用 SQLite、本地上传目录和本地 Chroma。PostgreSQL、S3/MinIO、HTTP Chroma 仅用于未来多实例部署。
+- 所有真实密钥只允许存在于本机 `backend/.env` 或系统环境变量中，禁止提交到 Git。
 
 完成本地模型认证后，可运行隔离的真实业务链路验收。该命令使用临时 SQLite、上传目录、checkpoint 和 Chroma，不会写入默认工作区数据：
 
@@ -67,7 +112,7 @@ cd backend
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 

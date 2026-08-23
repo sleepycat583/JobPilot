@@ -229,59 +229,6 @@ wheels = [
 ]
 
 [[package]]
-name = "career-agent-workbench-api"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "boto3" },
-    { name = "chromadb" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "langchain-openai" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "langgraph-checkpoint-sqlite" },
-    { name = "langgraph-supervisor" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "pydantic-settings" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-    { name = "python-multipart" },
-    { name = "sqlalchemy" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = ">=1.16,<2" },
-    { name = "boto3", specifier = ">=1.35,<2" },
-    { name = "chromadb", specifier = "==1.5.9" },
-    { name = "fastapi", specifier = ">=0.116,<1" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "langchain-openai", specifier = ">=0.3,<1" },
-    { name = "langgraph", specifier = ">=0.6,<1" },
-    { name = "langgraph-checkpoint-postgres", specifier = "==2.0.21" },
-    { name = "langgraph-checkpoint-sqlite", specifier = ">=2,<3" },
-    { name = "langgraph-supervisor", specifier = ">=0.0.29,<1" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
-    { name = "pydantic-settings", specifier = ">=2.10,<3" },
-    { name = "pypdf", specifier = ">=5,<7" },
-    { name = "python-docx", specifier = ">=1.1,<2" },
-    { name = "python-multipart", specifier = ">=0.0.20,<1" },
-    { name = "sqlalchemy", specifier = ">=2.0,<3" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4,<9" }]
-
-[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -753,6 +700,59 @@ sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247f
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
 ]
+
+[[package]]
+name = "jobpilot-api"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "boto3" },
+    { name = "chromadb" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "langgraph-checkpoint-sqlite" },
+    { name = "langgraph-supervisor" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic-settings" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "python-multipart" },
+    { name = "sqlalchemy" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.16,<2" },
+    { name = "boto3", specifier = ">=1.35,<2" },
+    { name = "chromadb", specifier = "==1.5.9" },
+    { name = "fastapi", specifier = ">=0.116,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "langchain-openai", specifier = ">=0.3,<1" },
+    { name = "langgraph", specifier = ">=0.6,<1" },
+    { name = "langgraph-checkpoint-postgres", specifier = "==2.0.21" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=2,<3" },
+    { name = "langgraph-supervisor", specifier = ">=0.0.29,<1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
+    { name = "pydantic-settings", specifier = ">=2.10,<3" },
+    { name = "pypdf", specifier = ">=5,<7" },
+    { name = "python-docx", specifier = ">=1.1,<2" },
+    { name = "python-multipart", specifier = ">=0.0.20,<1" },
+    { name = "sqlalchemy", specifier = ">=2.0,<3" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.4,<9" }]
 
 [[package]]
 name = "jsonpatch"

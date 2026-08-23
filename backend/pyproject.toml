@@ -1,7 +1,7 @@
 [project]
-name = "career-agent-workbench-api"
+name = "jobpilot-api"
 version = "0.1.0"
-description = "LangGraph Supervisor-Worker backend for the AI career workspace"
+description = "LangGraph Supervisor-Worker backend for JobPilot"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "alembic>=1.16,<2",

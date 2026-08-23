@@ -11,7 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    app_name: str = "Career Agent Workbench API"
+    app_name: str = "JobPilot API"
     app_env: str = "development"
     api_prefix: str = "/api"
     database_url: str = f"sqlite:///{(BACKEND_DIR / 'data' / 'app.db').as_posix()}"
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_base_url: str | None = None
     langsmith_tracing: bool = False
-    langsmith_project: str = "career-agent-workbench"
+    langsmith_project: str = "jobpilot"
     langsmith_api_key: SecretStr | None = None
     auto_create_schema: bool = False
 

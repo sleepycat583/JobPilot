@@ -11,7 +11,7 @@ from app.graph.state import CareerGraphState
 from app.core.observability import build_trace_config
 from app.models import JDRecord, ResumeRecord, ThreadRecord
 from app.services.conversation_actions import ConversationActionService, ConversationActionOutcome
-from app.services.store import append_event, load_thread_state, loads, save_thread_state, utc_iso
+from app.services.store import append_event, dumps, load_thread_state, loads, save_thread_state, utc_iso
 from app.services.task_runtime import TaskRuntime
 
 
@@ -56,6 +56,45 @@ class LangGraphRuntime:
 
     def _config(self, thread_id: str, run_id: str, *, operation: str = "conversation_turn") -> dict[str, Any]:
         return build_trace_config(thread_id, run_id, operation=operation)
+
+    async def _stream_message(self, session: Session, thread_id: str, run_id: str, message: dict[str, str]) -> bool:
+        """Persist safe, ordered visible-text chunks before the final message event.
+
+        The graph currently exposes a complete sanitized output rather than token
+        callbacks. Chunking at this boundary keeps the SSE contract incremental
+        without ever persisting tool calls, prompts, or raw model state.
+        """
+        content = message["content"]
+        chunk_size = 12
+        append_event(
+            session,
+            stream_type="thread",
+            stream_id=thread_id,
+            event_type="message_started",
+            data={"run_id": run_id, "message_id": message["id"]},
+        )
+        for index, start in enumerate(range(0, len(content), chunk_size)):
+            session.expire_all()
+            thread = session.get(ThreadRecord, thread_id)
+            if thread is None:
+                return False
+            state = load_thread_state(thread)
+            if state.get("status") == "cancelled":
+                return False
+            append_event(
+                session,
+                stream_type="thread",
+                stream_id=thread_id,
+                event_type="message_delta",
+                data={
+                    "run_id": run_id,
+                    "message_id": message["id"],
+                    "index": index,
+                    "delta": content[start : start + chunk_size],
+                },
+            )
+            await asyncio.sleep(0.05)
+        return True
 
     def _readonly_context(self, thread_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -209,6 +248,8 @@ class LangGraphRuntime:
                 "content": public_output,
                 "created_at": utc_iso(),
             }
+            if not await self._stream_message(session, thread_id, run_id, message):
+                return
             state["messages"].append(message)
             if state.get("pending_interrupt"):
                 state["status"] = "interrupted"
@@ -260,9 +301,15 @@ class LangGraphRuntime:
             state = load_thread_state(thread)
             if state.get("status") == "cancelled" or state.get("active_run_id") not in (None, run_id):
                 return
-            state["messages"].append(
-                {"id": str(uuid4()), "role": "assistant", "content": cleaned, "created_at": utc_iso()}
-            )
+            state["status"] = "running"
+            thread.status = "running"
+            thread.state_json = dumps(state)
+            session.add(thread)
+            session.commit()
+            message = {"id": str(uuid4()), "role": "assistant", "content": cleaned, "created_at": utc_iso()}
+            if not await self._stream_message(session, thread_id, run_id, message):
+                return
+            state["messages"].append(message)
             state["status"] = outcome.status
             if not (outcome.status == "interrupted" and state.get("pending_interrupt")):
                 state["task"] = {
@@ -278,7 +325,6 @@ class LangGraphRuntime:
             state.pop("active_run_id", None)
             state.pop("conversation_action", None)
             save_thread_state(session, thread, state)
-            message = state["messages"][-1]
             append_event(
                 session,
                 stream_type="thread",

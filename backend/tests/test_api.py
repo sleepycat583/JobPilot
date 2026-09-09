@@ -410,6 +410,22 @@ def test_sse_serialization_and_persisted_payloads_are_sanitized(client: TestClie
         assert forbidden not in serialized
 
 
+def test_chat_message_persists_ordered_stream_events_matching_final_message(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    client.post(f"/api/threads/{thread_id}/messages", headers=key(), json={"content": "增量事件"})
+    state = wait_for_thread(client, thread_id, "completed")
+    with client.app.state.session_factory() as session:
+        records = session.query(ExecutionEventRecord).filter_by(stream_id=thread_id).order_by(ExecutionEventRecord.id).all()
+        payloads = [(record.event_type, loads(record.payload_json, {})) for record in records]
+    stream = [payload for event, payload in payloads if event == "message_delta"]
+    completed = next(payload for event, payload in payloads if event == "message_completed")
+    assert [event for event, _ in payloads][-1] == "run_completed"
+    assert [event for event, _ in payloads].count("message_started") == 1
+    assert len(stream) >= 2
+    assert "".join(item["delta"] for item in stream) == completed["message"]["content"] == state["messages"][-1]["content"]
+    assert [item["index"] for item in stream] == list(range(len(stream)))
+
+
 def test_sse_rejects_invalid_last_event_id(client: TestClient) -> None:
     thread_id = create_thread(client)
     response = client.get(f"/api/threads/{thread_id}/events", headers={"Last-Event-ID": "not-a-number"})

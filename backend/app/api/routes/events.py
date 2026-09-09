@@ -56,6 +56,9 @@ async def thread_events(
                 for record in records:
                     cursor = record.id
                     yield _sse(event_id=record.id, event=record.event_type, data=loads(record.payload_json, {}))
+                    # Give the ASGI server a scheduling point after each event so
+                    # incremental chunks are flushed independently to the client.
+                    await asyncio.sleep(0.01)
             now = time.monotonic()
             if now - heartbeat_at >= request.app.state.settings.sse_heartbeat_seconds:
                 yield _sse(comment="heartbeat")

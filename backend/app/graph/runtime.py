@@ -66,6 +66,10 @@ class LangGraphRuntime:
         """
         content = message["content"]
         chunk_size = 12
+        session.expire_all()
+        thread = session.get(ThreadRecord, thread_id)
+        if thread is None or load_thread_state(thread).get("active_run_id") != run_id:
+            return False
         append_event(
             session,
             stream_type="thread",
@@ -79,7 +83,7 @@ class LangGraphRuntime:
             if thread is None:
                 return False
             state = load_thread_state(thread)
-            if state.get("status") == "cancelled":
+            if state.get("status") == "cancelled" or state.get("active_run_id") != run_id:
                 return False
             append_event(
                 session,
@@ -250,6 +254,13 @@ class LangGraphRuntime:
             }
             if not await self._stream_message(session, thread_id, run_id, message):
                 return
+            session.expire_all()
+            thread = session.get(ThreadRecord, thread_id)
+            if thread is None:
+                return
+            state = load_thread_state(thread)
+            if state.get("status") == "cancelled" or state.get("active_run_id") != run_id:
+                return
             state["messages"].append(message)
             if state.get("pending_interrupt"):
                 state["status"] = "interrupted"
@@ -308,6 +319,13 @@ class LangGraphRuntime:
             session.commit()
             message = {"id": str(uuid4()), "role": "assistant", "content": cleaned, "created_at": utc_iso()}
             if not await self._stream_message(session, thread_id, run_id, message):
+                return
+            session.expire_all()
+            thread = session.get(ThreadRecord, thread_id)
+            if thread is None:
+                return
+            state = load_thread_state(thread)
+            if state.get("status") == "cancelled" or state.get("active_run_id") != run_id:
                 return
             state["messages"].append(message)
             state["status"] = outcome.status

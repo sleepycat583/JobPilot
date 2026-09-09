@@ -26,7 +26,7 @@ export function ChatPage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [running, state?.messages])
+  }, [running, state?.messages, streamDraft?.lastIndex])
 
   const submit = () => {
     const content = composer.trim()

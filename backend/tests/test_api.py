@@ -426,6 +426,21 @@ def test_chat_message_persists_ordered_stream_events_matching_final_message(clie
     assert [item["index"] for item in stream] == list(range(len(stream)))
 
 
+def test_cancelled_stream_cannot_write_final_assistant_message(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    client.post(f"/api/threads/{thread_id}/messages", headers=key(), json={"content": "取消流式任务"})
+    import time
+
+    time.sleep(0.08)
+    cancelled = client.post(f"/api/threads/{thread_id}/cancel", headers=key())
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    time.sleep(0.2)
+    state = client.get(f"/api/threads/{thread_id}/state").json()
+    assert state["status"] == "cancelled"
+    assert not any(message["role"] == "assistant" and message["id"] != state["messages"][0]["id"] for message in state["messages"])
+
+
 def test_sse_rejects_invalid_last_event_id(client: TestClient) -> None:
     thread_id = create_thread(client)
     response = client.get(f"/api/threads/{thread_id}/events", headers={"Last-Event-ID": "not-a-number"})

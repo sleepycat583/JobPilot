@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, newIdempotencyKey } from '../lib/api/client'
 import type { MessageItem, StreamDraft, ThreadState } from '../shared/types'
 
@@ -55,6 +55,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [selectedResumeId, setSelectedResumeId] = useState('')
   const [selectedJDId, setSelectedJDId] = useState('')
   const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null)
+  const knownMessageIds = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    knownMessageIds.current = new Set(stateQuery.data?.messages.map((message) => message.id) ?? [])
+  }, [stateQuery.data?.messages])
 
   useEffect(() => {
     if (stateQuery.data?.selected_resume_id) setSelectedResumeId(stateQuery.data.selected_resume_id)
@@ -82,7 +87,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const data = parse(event as MessageEvent<string>)
       const runId = typeof data?.run_id === 'string' ? data.run_id : ''
       const messageId = typeof data?.message_id === 'string' ? data.message_id : ''
-      if (runId && messageId) setStreamDraft({ runId, messageId, content: '', lastIndex: -1 })
+      if (!runId || !messageId || knownMessageIds.current.has(messageId)) return
+      setStreamDraft({ runId, messageId, content: '', lastIndex: -1 })
       refresh()
     }
     const onDelta = (event: Event) => {
@@ -101,6 +107,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const onCompleted = (event: Event) => {
       const data = parse(event as MessageEvent<string>)
       const message = data?.message as MessageItem | undefined
+      if (message?.id) knownMessageIds.current.add(message.id)
       setStreamDraft((current) => {
         if (message && current?.messageId === message.id) return null
         return current

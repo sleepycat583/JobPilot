@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     object_storage_prefix: str = "career-agent"
     frontend_origin: str = "http://127.0.0.1:5173"
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
-    sse_poll_interval_seconds: float = Field(default=0.5, ge=0.2, le=5.0)
+    sse_poll_interval_seconds: float = Field(default=0.05, ge=0.05, le=5.0)
     sse_replay_batch_size: int = Field(default=100, ge=1, le=1_000)
     local_history_retention_days: int = Field(default=30, ge=1, le=3_650)
     mock_task_delay_seconds: float = Field(default=0.15, ge=0.01, le=3.0)

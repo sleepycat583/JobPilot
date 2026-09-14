@@ -8,6 +8,13 @@ export type MessageItem = {
   created_at: string
 }
 
+export type StreamDraft = {
+  runId: string
+  messageId: string
+  content: string
+  lastIndex: number
+}
+
 export type TaskStep = { label: string; status: 'pending' | 'active' | 'done' }
 export type TaskView = { status: TaskStatus; title: string; detail: string; steps: TaskStep[] }
 

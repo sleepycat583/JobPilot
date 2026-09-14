@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, newIdempotencyKey } from '../lib/api/client'
-import type { ThreadState } from '../shared/types'
+import type { MessageItem, StreamDraft, ThreadState } from '../shared/types'
 
 type WorkspaceValue = {
   threadId: string | null
@@ -14,6 +14,7 @@ type WorkspaceValue = {
   setSelectedJDId: (id: string) => void
   refreshState: () => Promise<unknown>
   cancelActiveRun: () => Promise<ThreadState>
+  streamDraft: StreamDraft | null
 }
 
 const WorkspaceContext = createContext<WorkspaceValue | null>(null)
@@ -53,6 +54,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   })
   const [selectedResumeId, setSelectedResumeId] = useState('')
   const [selectedJDId, setSelectedJDId] = useState('')
+  const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null)
+  const knownMessageIds = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    knownMessageIds.current = new Set(stateQuery.data?.messages.map((message) => message.id) ?? [])
+  }, [stateQuery.data?.messages])
 
   useEffect(() => {
     if (stateQuery.data?.selected_resume_id) setSelectedResumeId(stateQuery.data.selected_resume_id)
@@ -69,8 +76,52 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['match-reports', threadId] })
       void queryClient.invalidateQueries({ queryKey: ['interview-history', threadId] })
     }
-    const events = ['node_started', 'message_completed', 'run_completed', 'run_failed', 'run_cancelled', 'interrupt_required', 'run_resumed']
+    const parse = (event: MessageEvent<string>) => {
+      try {
+        return JSON.parse(event.data) as Record<string, unknown>
+      } catch {
+        return null
+      }
+    }
+    const onStarted = (event: Event) => {
+      const data = parse(event as MessageEvent<string>)
+      const runId = typeof data?.run_id === 'string' ? data.run_id : ''
+      const messageId = typeof data?.message_id === 'string' ? data.message_id : ''
+      if (!runId || !messageId || knownMessageIds.current.has(messageId)) return
+      setStreamDraft({ runId, messageId, content: '', lastIndex: -1 })
+      refresh()
+    }
+    const onDelta = (event: Event) => {
+      const data = parse(event as MessageEvent<string>)
+      const runId = typeof data?.run_id === 'string' ? data.run_id : ''
+      const messageId = typeof data?.message_id === 'string' ? data.message_id : ''
+      const index = typeof data?.index === 'number' ? data.index : -1
+      const delta = typeof data?.delta === 'string' ? data.delta : ''
+      if (!runId || !messageId || !delta || index < 0) return
+      setStreamDraft((current) => {
+        if (!current || current.runId !== runId || current.messageId !== messageId) return current
+        if (index <= current.lastIndex) return current
+        return { ...current, content: current.content + delta, lastIndex: index }
+      })
+    }
+    const onCompleted = (event: Event) => {
+      const data = parse(event as MessageEvent<string>)
+      const message = data?.message as MessageItem | undefined
+      if (message?.id) knownMessageIds.current.add(message.id)
+      setStreamDraft((current) => {
+        if (message && current?.messageId === message.id) return null
+        return current
+      })
+      refresh()
+    }
+    const clearDraft = () => setStreamDraft(null)
+    source.addEventListener('message_started', onStarted)
+    source.addEventListener('message_delta', onDelta)
+    source.addEventListener('message_completed', onCompleted)
+    const events = ['node_started', 'run_completed', 'interrupt_required', 'run_resumed']
     events.forEach((name) => source.addEventListener(name, refresh))
+    source.addEventListener('run_failed', clearDraft)
+    source.addEventListener('run_cancelled', clearDraft)
     source.onopen = () => {
       setSseHealthy(true)
       setSseRetryDelay(5_000)
@@ -79,7 +130,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setSseHealthy(false)
       setSseRetryDelay((current) => Math.min(current * 2, 30_000))
     }
-    return () => source.close()
+    return () => {
+      source.close()
+      setStreamDraft(null)
+    }
   }, [queryClient, threadId])
 
   const value = useMemo<WorkspaceValue>(() => ({
@@ -98,7 +152,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       queryClient.setQueryData(['thread-state', threadId], next)
       return next
     },
-  }), [bootstrap.error, bootstrap.isLoading, queryClient, selectedJDId, selectedResumeId, stateQuery, threadId])
+    streamDraft,
+  }), [bootstrap.error, bootstrap.isLoading, queryClient, selectedJDId, selectedResumeId, stateQuery, streamDraft, threadId])
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>
 }

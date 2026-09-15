@@ -107,6 +107,18 @@ class QccMcpClient:
                         await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
+    async def list_tools(self, server: str) -> Any:
+        """Return provider tool metadata when transport supports discovery."""
+        if server not in self.server_urls:
+            raise QccProviderError(f"unknown QCC server: {server}")
+        discover = getattr(self.transport, "list_tools", None)
+        if discover is None:
+            return sorted(self.allowlist.get(server, set()))
+        result = discover(server, {"Authorization": f"Bearer {self.api_key}"}, self.timeout_seconds)
+        if inspect.isawaitable(result):
+            result = await asyncio.wait_for(result, timeout=self.timeout_seconds)
+        return result
+
 
 def unwrap_mcp_result(result: Any) -> Any:
     """Extract common MCP content envelopes while preserving unknown payloads."""

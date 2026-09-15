@@ -135,3 +135,15 @@ def test_investigate_distinguishes_quota_exceeded():
     )
     report = asyncio.run(investigate(EmployerInvestigationRequest(company_name="Acme"), client))
     assert report.status == InvestigationStatus.QUOTA_EXCEEDED
+
+
+def test_investigate_without_confirmation_always_pauses_single_candidate():
+    transport = FakeTransport([{"data": [{"name": "Acme", "creditCode": "9131"}]}])
+    client = QccMcpClient(
+        api_key="secret",
+        server_urls={"company": "https://agent.qcc.com/mcp/company/stream"},
+        allowlist={"company": {"search"}},
+        transport=transport,
+    )
+    report = asyncio.run(investigate(EmployerInvestigationRequest(company_name="Acme"), client))
+    assert report.status == InvestigationStatus.AWAITING_CONFIRMATION

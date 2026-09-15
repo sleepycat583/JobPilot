@@ -153,3 +153,9 @@ async def investigate(request: EmployerInvestigationRequest, client: QccMcpClien
 def idempotency_key(request: EmployerInvestigationRequest) -> str:
     raw = json.dumps({"company_name": request.company_name, "credit_code": request.unified_social_credit_code, "jd_id": request.jd_id}, ensure_ascii=True, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# Public aliases used by adapters and tests that need normalization without a provider call.
+parse_entity_candidates = _candidate_list
+normalize_company_result = _normalize_company
+normalize_risk_result = _normalize_risks

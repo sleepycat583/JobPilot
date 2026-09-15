@@ -141,6 +141,8 @@ async def investigate(request: EmployerInvestigationRequest, client: QccMcpClien
             name, code, reg_status, op_status = chosen.name, chosen.unified_social_credit_code, chosen.status, None
         if not code:
             code = request.unified_social_credit_code
+        if not code:
+            return EmployerInvestigationReport(subject_name=name, registration_status=reg_status, operation_status=op_status, status=InvestigationStatus.ENTITY_NOT_FOUND)
         risk_payload = await client.call_tool("risk", "risk", {"credit_code": code, "name": name})
         risk_items, available, refs = _normalize_risks(risk_payload)
         summary = (f"发现 {len(risk_items)} 项风险" if risk_items else None) if available else None

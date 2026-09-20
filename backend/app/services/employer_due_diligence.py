@@ -69,16 +69,16 @@ def _payload_data(payload: Any) -> Any:
 def _candidate_list(payload: Any) -> list[EmployerCandidate]:
     data = _payload_data(payload)
     if isinstance(data, dict):
-        data = data.get("list") or data.get("items") or [data]
+        data = data.get("list") or data.get("items") or data.get("企业信息") or [data]
     if not isinstance(data, list):
         return []
     candidates: list[EmployerCandidate] = []
     for item in data:
         if not isinstance(item, dict):
             continue
-        name = item.get("name") or item.get("companyName") or item.get("entName")
+        name = item.get("name") or item.get("companyName") or item.get("entName") or item.get("企业名称")
         if name:
-            code = item.get("creditCode") or item.get("unifiedSocialCreditCode") or item.get("credit_code")
+            code = item.get("creditCode") or item.get("unifiedSocialCreditCode") or item.get("credit_code") or item.get("统一社会信用代码")
             candidates.append(EmployerCandidate(name=str(name), unified_social_credit_code=code, status=item.get("status"), raw=dict(item)))
     return candidates
 
@@ -90,10 +90,10 @@ def _normalize_company(payload: Any) -> tuple[str | None, str | None, str | None
     if not isinstance(data, dict):
         return None, None, None, None
     return (
-        data.get("name") or data.get("companyName") or data.get("entName"),
-        data.get("creditCode") or data.get("unifiedSocialCreditCode") or data.get("credit_code"),
-        data.get("status") or data.get("registrationStatus"),
-        data.get("operationStatus") or data.get("businessStatus"),
+        data.get("name") or data.get("companyName") or data.get("entName") or data.get("企业名称"),
+        data.get("creditCode") or data.get("unifiedSocialCreditCode") or data.get("credit_code") or data.get("统一社会信用代码"),
+        data.get("status") or data.get("registrationStatus") or data.get("登记状态") or data.get("状态"),
+        data.get("operationStatus") or data.get("businessStatus") or data.get("经营状态"),
     )
 
 
@@ -118,20 +118,37 @@ def _normalize_risks(payload: Any) -> tuple[list[RiskItem], bool, list[str]]:
             if ref is not None:
                 refs.append(str(ref))
             risks.append(RiskItem(category=str(item.get("category") or item.get("type") or "risk"), title=str(title), detail=item.get("detail") or item.get("description"), severity=item.get("severity"), source_ref=str(ref) if ref is not None else None))
+    if not risks and isinstance(data, dict) and isinstance(data.get("搜索结果"), str):
+        return [], True, refs
     return risks, bool(available), refs
 
 
-async def investigate(request: EmployerInvestigationRequest, client: QccMcpClient) -> EmployerInvestigationReport:
+async def investigate(
+    request: EmployerInvestigationRequest,
+    client: QccMcpClient,
+    *,
+    company_tool_name: str = "search",
+    company_registration_tool_name: str = "get_company_registration_info",
+    risk_tool_name: str = "risk",
+) -> EmployerInvestigationReport:
     try:
         if request.unified_social_credit_code:
-            company_payload = await client.call_tool("company", "search", {"credit_code": request.unified_social_credit_code})
+            # Keep compatibility with providers/tests that expose only the
+            # company search tool; production QCC uses the registration tool.
+            available_company_tools = getattr(client, "allowlist", {}).get("company", set())
+            registration_tool = company_registration_tool_name if company_registration_tool_name in available_company_tools else company_tool_name
+            company_payload = await client.call_tool(
+                "company",
+                registration_tool,
+                {"searchKey": request.unified_social_credit_code},
+            )
             name, code, reg_status, op_status = _normalize_company(company_payload)
             if not name:
                 return EmployerInvestigationReport(unified_social_credit_code=request.unified_social_credit_code, status=InvestigationStatus.ENTITY_NOT_FOUND)
         else:
             if not request.company_name:
                 return EmployerInvestigationReport(status=InvestigationStatus.ENTITY_NOT_FOUND)
-            company_payload = await client.call_tool("company", "search", {"name": request.company_name})
+            company_payload = await client.call_tool("company", company_tool_name, {"searchKey": request.company_name})
             candidates = _candidate_list(company_payload)
             if not candidates:
                 return EmployerInvestigationReport(status=InvestigationStatus.ENTITY_NOT_FOUND)
@@ -143,7 +160,8 @@ async def investigate(request: EmployerInvestigationRequest, client: QccMcpClien
             code = request.unified_social_credit_code
         if not code:
             return EmployerInvestigationReport(subject_name=name, registration_status=reg_status, operation_status=op_status, status=InvestigationStatus.ENTITY_NOT_FOUND)
-        risk_payload = await client.call_tool("risk", "risk", {"credit_code": code, "name": name})
+        # QCC risk servers use ``searchKey`` for either a credit code or name.
+        risk_payload = await client.call_tool("risk", risk_tool_name, {"searchKey": code})
         risk_items, available, refs = _normalize_risks(risk_payload)
         summary = (f"发现 {len(risk_items)} 项风险" if risk_items else None) if available else None
         return EmployerInvestigationReport(subject_name=name, unified_social_credit_code=code, registration_status=reg_status, operation_status=op_status, risk_items=risk_items, risk_summary=summary, risk_data_available=available, source_refs=refs, provider_request_id=extract_request_id(risk_payload), status=InvestigationStatus.COMPLETED)

@@ -77,6 +77,24 @@ class MatchReportRead(BaseModel):
     created_at: datetime
 
 
+class EmployerInvestigationRead(BaseModel):
+    id: str
+    thread_id: str
+    subject_name: str
+    unified_social_credit_code: str
+    result_status: str
+    result: dict[str, Any]
+    provider_request_id: str | None = None
+    queried_at: datetime
+    created_at: datetime
+
+
+class EmployerInvestigationCreate(BaseModel):
+    thread_id: str
+    company_name: str | None = Field(default=None, min_length=1, max_length=255)
+    unified_social_credit_code: str | None = Field(default=None, min_length=8, max_length=32)
+
+
 class InterviewHistoryRead(BaseModel):
     id: str
     thread_id: str
@@ -148,7 +166,7 @@ class TaskView(BaseModel):
 
 class InterruptPayload(BaseModel):
     id: str
-    type: Literal["low_match_score", "interview_answer", "interview_continue", "final_review"]
+    type: Literal["low_match_score", "interview_answer", "interview_continue", "final_review", "employer_entity_confirmation"]
     title: str
     detail: str
     accepted_actions: list[str]

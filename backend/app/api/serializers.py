@@ -1,5 +1,5 @@
-from app.models import InterviewRecord, JDRecord, JobRecord, MatchReportRecord, ResumeRecord
-from app.schemas.contracts import ErrorDetail, InterviewHistoryRead, JDRead, JobRead, MatchReportRead, ResumeRead
+from app.models import EmployerInvestigationRecord, InterviewRecord, JDRecord, JobRecord, MatchReportRecord, ResumeRecord
+from app.schemas.contracts import EmployerInvestigationRead, ErrorDetail, InterviewHistoryRead, JDRead, JobRead, MatchReportRead, ResumeRead
 from app.services.store import loads
 
 
@@ -65,6 +65,20 @@ def serialize_match_report(record: MatchReportRecord) -> MatchReportRead:
         jd_id=record.jd_id,
         strict=record.strict,
         result=loads(record.result_json, {}),
+        created_at=record.created_at,
+    )
+
+
+def serialize_employer_investigation(record: EmployerInvestigationRecord) -> EmployerInvestigationRead:
+    return EmployerInvestigationRead(
+        id=record.id,
+        thread_id=record.thread_id,
+        subject_name=record.subject_name,
+        unified_social_credit_code=record.unified_social_credit_code,
+        result_status=record.result_status,
+        result=loads(record.result_json, {}),
+        provider_request_id=record.provider_request_id,
+        queried_at=record.queried_at,
         created_at=record.created_at,
     )
 

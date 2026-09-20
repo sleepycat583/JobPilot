@@ -30,6 +30,7 @@ ALLOWED_ACTIONS: dict[WorkerName, frozenset[WorkerAction]] = {
             "end_interview",
         }
     ),
+    "employer_worker": frozenset({"respond", "run_employer_due_diligence"}),
     "chat_worker": frozenset({"respond"}),
 }
 

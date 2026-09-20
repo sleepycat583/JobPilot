@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -52,7 +53,12 @@ class QccMcpClient:
         max_concurrency: int = 4,
         retry_backoff_seconds: float = 0.25,
     ) -> None:
-        self.api_key = api_key.strip()
+        # 兼容用户把完整 Authorization 值误填进配置的情况，避免发送
+        # ``Bearer Bearer <token>`` 导致 QCC 返回 401 invalid_token。
+        normalized_api_key = api_key.strip()
+        if normalized_api_key.lower().startswith("bearer "):
+            normalized_api_key = normalized_api_key[7:].strip()
+        self.api_key = normalized_api_key
         self.server_urls = dict(server_urls)
         self.allowlist = {k: set(v) for k, v in allowlist.items()}
         self.transport = transport or self._http_transport
@@ -60,6 +66,18 @@ class QccMcpClient:
         self.max_retries = max(0, min(max_retries, 2))
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        self._connected = False
+        self._tool_cache: dict[str, Any] = {}
+
+    async def connect(self) -> "QccMcpClient":
+        """Initialize the adapter lifecycle; transport sessions are lazy."""
+
+        self._connected = True
+        return self
+
+    async def close(self) -> None:
+        self._connected = False
+        self._tool_cache.clear()
 
     async def _http_transport(
         self,
@@ -82,6 +100,14 @@ class QccMcpClient:
                 setattr(error, "status_code", response.status_code)
                 raise error
             response.raise_for_status()
+            if "text/event-stream" in response.headers.get("content-type", ""):
+                for line in response.text.splitlines():
+                    if line.startswith("data: "):
+                        try:
+                            return json.loads(line[6:])
+                        except json.JSONDecodeError:
+                            continue
+                raise QccProviderError("QCC MCP SSE response did not contain JSON", kind="provider_error")
             return response.json()
 
     async def call_tool(self, server: str, tool_name: str, arguments: Mapping[str, Any]) -> Any:
@@ -96,7 +122,7 @@ class QccMcpClient:
                     result = self.transport(server, tool_name, arguments, headers, self.timeout_seconds)
                     if inspect.isawaitable(result):
                         result = await asyncio.wait_for(result, timeout=self.timeout_seconds)
-                    return result
+                    return unwrap_mcp_result(result)
                 except Exception as exc:
                     if attempt >= self.max_retries or not _is_transient(exc):
                         if isinstance(exc, QccProviderError):
@@ -111,17 +137,33 @@ class QccMcpClient:
         """Return provider tool metadata when transport supports discovery."""
         if server not in self.server_urls:
             raise QccProviderError(f"unknown QCC server: {server}")
+        if server in self._tool_cache:
+            return self._tool_cache[server]
         discover = getattr(self.transport, "list_tools", None)
         if discover is None:
-            return sorted(self.allowlist.get(server, set()))
+            result = sorted(self.allowlist.get(server, set()))
+            self._tool_cache[server] = result
+            return result
         result = discover(server, {"Authorization": f"Bearer {self.api_key}"}, self.timeout_seconds)
         if inspect.isawaitable(result):
             result = await asyncio.wait_for(result, timeout=self.timeout_seconds)
+        self._tool_cache[server] = result
         return result
 
 
 def unwrap_mcp_result(result: Any) -> Any:
     """Extract common MCP content envelopes while preserving unknown payloads."""
+    if isinstance(result, str):
+        for line in result.splitlines():
+            if line.startswith("data: "):
+                try:
+                    return unwrap_mcp_result(json.loads(line[6:]))
+                except json.JSONDecodeError:
+                    continue
+        try:
+            return json.loads(result)
+        except json.JSONDecodeError:
+            return result
     if isinstance(result, Mapping):
         if "structuredContent" in result:
             return result["structuredContent"]
@@ -130,9 +172,11 @@ def unwrap_mcp_result(result: Any) -> Any:
             if "structuredContent" in inner:
                 return inner["structuredContent"]
             if "content" in inner:
-                return inner["content"]
+                return unwrap_mcp_result(inner["content"])
         if "content" in result and len(result) == 1:
-            return result["content"]
+            return unwrap_mcp_result(result["content"])
+    if isinstance(result, list) and result and isinstance(result[0], Mapping) and result[0].get("type") == "text":
+        return unwrap_mcp_result(result[0].get("text", ""))
     return result
 
 

@@ -13,6 +13,7 @@ from app.models import JDRecord, ResumeRecord, ThreadRecord
 from app.services.conversation_actions import ConversationActionService, ConversationActionOutcome
 from app.services.store import append_event, load_thread_state, loads, save_thread_state, utc_iso
 from app.services.task_runtime import TaskRuntime
+from app.services.qcc_client import QccMcpClient
 
 
 WORKER_LABELS = {
@@ -20,6 +21,7 @@ WORKER_LABELS = {
     "jd_worker": "JD Worker",
     "match_worker": "匹配 Worker",
     "interview_worker": "面试 Worker",
+    "employer_worker": "雇主背调 Worker",
     "chat_worker": "对话 Worker",
 }
 
@@ -30,11 +32,24 @@ class LangGraphRuntime:
         graph: Any,
         session_factory: sessionmaker[Session],
         task_runtime: TaskRuntime | None = None,
+        qcc_client: QccMcpClient | None = None,
+        report_cache_ttl_seconds: int = 86_400,
+        company_tool_name: str = "search",
+        risk_tool_name: str = "risk",
+        company_registration_tool_name: str = "get_company_registration_info",
     ) -> None:
         self.graph = graph
         self.session_factory = session_factory
         self.action_service = (
-            ConversationActionService(session_factory, task_runtime) if task_runtime is not None else None
+            ConversationActionService(
+                session_factory,
+                task_runtime,
+                qcc_client,
+                report_cache_ttl_seconds,
+                company_tool_name,
+                risk_tool_name,
+                company_registration_tool_name,
+            ) if task_runtime is not None else None
         )
         self.tasks: set[asyncio.Task[None]] = set()
 
@@ -42,6 +57,21 @@ class LangGraphRuntime:
         task = asyncio.create_task(coroutine)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+
+    async def process_employer_due_diligence(self, thread_id: str, run_id: str, content: str) -> None:
+        if self.action_service is None:
+            await self._finalize_failure(thread_id, run_id)
+            return
+        try:
+            outcome = await self.action_service.execute(thread_id, run_id, "run_employer_due_diligence", content)
+            if outcome is None:
+                await self._finalize_failure(thread_id, run_id)
+            else:
+                await self._finalize_action(thread_id, run_id, outcome)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await self._finalize_failure(thread_id, run_id)
 
     async def shutdown(self) -> None:
         if not self.tasks:
@@ -91,6 +121,7 @@ class LangGraphRuntime:
                 },
                 "active_interview": state.get("interview"),
                 "pending_interrupt": state.get("pending_interrupt"),
+                "employer_investigation": state.get("employer_investigation"),
             }
 
     async def process_message(self, thread_id: str, run_id: str, content: str) -> None:

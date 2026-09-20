@@ -13,6 +13,7 @@ WORKER_DESCRIPTIONS: dict[WorkerName, str] = {
     "jd_worker": "Route only the goal to parse or explain one job description's responsibilities, requirements, skills, or interview focus. If the JD is missing, still route here when that goal is clear.",
     "match_worker": "Route only the goal to compare a resume with a job description, explain evidence, strengths, gaps, score, or priorities. If materials are missing, still route here when comparison is explicit.",
     "interview_worker": "Route only the goal to start, continue, answer, skip, evaluate, or review a mock interview. An explicit switch away from a completed or ended interview takes precedence.",
+    "employer_worker": "Route requests to verify an employer before applying: company existence, registration/operating status, business abnormalities, litigation and other QCC risk information. A JD mentioning an employer should be routed here only when the user asks for employer due diligence or reliability verification.",
     "chat_worker": "Route smalltalk, general career advice, or messages whose actual goal cannot be assigned to one of the four domain workers. Do not use chat merely because a clearly requested domain task lacks a resource.",
 }
 

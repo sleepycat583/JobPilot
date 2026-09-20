@@ -4,8 +4,15 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.models import ThreadRecord
+from app.services.conversation_actions import extract_employer_query
 from app.services.store import load_thread_state, save_thread_state
 from tests.test_api import create_jd, create_resume, create_thread, key, wait_for_thread
+
+
+def test_extract_employer_query_removes_conversational_wrapping() -> None:
+    assert extract_employer_query("调用你的工具查一下字节跳动这家公司") == "字节跳动"
+    assert extract_employer_query("请查询腾讯科技（深圳）有限公司") == "腾讯科技（深圳）有限公司"
+    assert extract_employer_query("91110000100000000X") == "91110000100000000X"
 
 
 class ActionGraph:

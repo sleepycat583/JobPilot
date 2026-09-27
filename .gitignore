@@ -87,3 +87,5 @@ desktop.ini
 # ── IDE 配置 ──────────────────────────────────────────────────
 .vscode/
 .idea/
+backend/docs/mvp-roadmap.md
+backend/docs/architecture-review.md

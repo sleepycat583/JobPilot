@@ -162,6 +162,7 @@ input:focus-visible {
   margin: 4px 14px 14px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
+  text-decoration: none;
   font-weight: 650;
 }
 
@@ -190,6 +191,8 @@ input:focus-visible {
   background: transparent;
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
+  text-decoration-line: none;
 }
 
 .nav-item:hover {
@@ -236,6 +239,8 @@ input:focus-visible {
   background: transparent;
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
+  text-decoration-line: none;
 }
 
 .history-item:hover,
@@ -869,6 +874,7 @@ input:focus-visible {
   color: #fff;
   background: var(--accent);
   font-size: 12px;
+  text-decoration-line: none;
   font-weight: 700;
 }
 
@@ -1924,7 +1930,7 @@ input:focus-visible {
 
 .report-header h2 { margin: 6px 0 0; font-size: 20px; }
 .report-header p { margin: 7px 0 0; color: var(--text-soft); font-size: 10px; }
-.report-header .report-summary { display: -webkit-box; max-width: 72ch; overflow: hidden; font-size: 13px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.report-header .report-summary { display: -webkit-box; max-width: 72ch; overflow: hidden; font-size: 13px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .report-header .report-meta { color: var(--text-faint); }
 .report-score { white-space: nowrap; }
 .report-score strong { color: var(--accent-strong); font-size: 34px; }
@@ -2318,13 +2324,20 @@ input:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
-/* API-connected controls and empty states */
-.nav-item,
-.new-chat-button,
-.history-item {
-  text-decoration: none;
-}
 
+/* API-connected controls and empty states */
+a.nav-item,
+a.new-chat-button,
+a.history-item,
+a.nav-item:link,
+a.new-chat-button:link,
+a.history-item:link,
+a.nav-item:visited,
+a.new-chat-button:visited,
+a.history-item:visited {
+  text-decoration: none !important;
+  text-decoration-line: none !important;
+}
 .selection-field select,
 .setup-form select.select-button {
   appearance: none;

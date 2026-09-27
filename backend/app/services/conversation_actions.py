@@ -201,10 +201,41 @@ class ConversationActionService:
     @staticmethod
     def _report_message(report: EmployerInvestigationRecord | Any) -> str:
         payload = loads(report.result_json, {}) if isinstance(report, EmployerInvestigationRecord) else report.model_dump(mode="json")
+
+        # 基本信息
+        basic_info = f"""## 📋 雇主背调报告
+**公司名称**：{payload.get('subject_name') or report.subject_name}
+**统一社会信用代码**：{payload.get('unified_social_credit_code') or report.unified_social_credit_code}
+**登记状态**：{payload.get('registration_status') or '未提供'}
+**经营状态**：{payload.get('operation_status') or '未提供'}
+**查询时间**：{payload.get('queried_at') or getattr(report, 'queried_at', utc_iso()).isoformat()}
+"""
+
+        # 风险明细
+        risk_section = "\n## ⚠️ 风险信息\n"
         risk_available = bool(payload.get("risk_data_available"))
         risks = payload.get("risk_items") or []
-        risk_text = payload.get("risk_summary") or ("企查查未返回可用风险数据，不能据此认定无风险。" if not risk_available else "暂未发现已返回的风险项目。")
-        return f"雇主背调完成：{payload.get('subject_name') or report.subject_name}\n统一社会信用代码：{payload.get('unified_social_credit_code') or report.unified_social_credit_code}\n登记状态：{payload.get('registration_status') or '未提供'}\n风险：{risk_text}\n查询时间：{payload.get('queried_at') or getattr(report, 'queried_at', utc_iso()).isoformat()}\n\n{payload.get('disclaimer', '企查查数据仅供信息核验参考，不构成法律或投资结论。')}"
+
+        if not risk_available:
+            risk_section += "⚠️ 企查查未返回可用风险数据，**不能据此认定无风险**。建议通过其他渠道进一步核实。\n"
+        elif not risks:
+            risk_section += "✅ 暂未发现已返回的风险项目（基于企查查当前数据）。\n"
+        else:
+            risk_section += f"发现 {len(risks)} 项风险记录：\n\n"
+            for idx, risk in enumerate(risks, 1):
+                severity_emoji = {"高": "🔴", "中": "🟡", "低": "🟢"}.get(risk.get("severity", ""), "⚪")
+                risk_section += f"""### {idx}. {severity_emoji} {risk.get('title', '未命名风险')}
+- **类别**：{risk.get('category', '未分类')}
+- **严重程度**：{risk.get('severity', '未评级')}
+- **详细说明**：{risk.get('detail', '无详情')}
+{f"- **来源**：{risk.get('source_ref')}" if risk.get('source_ref') else ""}
+
+"""
+
+        # 免责声明
+        disclaimer = f"\n---\n💡 {payload.get('disclaimer', '企查查数据仅供信息核验参考，不构成法律或投资结论。')}\n"
+
+        return basic_info + risk_section + disclaimer
 
     def _existing_action(self, thread_id: str, run_id: str, action: str) -> dict[str, Any] | None:
         with self.session_factory() as session:

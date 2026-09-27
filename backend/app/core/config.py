@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     object_storage_access_key_id: SecretStr | None = None
     object_storage_secret_access_key: SecretStr | None = None
     object_storage_prefix: str = "career-agent"
-    frontend_origin: str = "http://127.0.0.1:5173"
+    frontend_origin: str = "http://localhost:5173"
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
     sse_poll_interval_seconds: float = Field(default=0.05, ge=0.05, le=5.0)
     sse_replay_batch_size: int = Field(default=100, ge=1, le=1_000)
@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     langsmith_project: str = "jobpilot"
     langsmith_api_key: SecretStr | None = None
     auto_create_schema: bool = False
+    qcc_due_diligence_enabled: bool = False
+    qcc_enabled: bool | None = None
+    qcc_api_key: SecretStr | None = None
+    qcc_company_mcp_url: str = "https://agent.qcc.com/mcp/company/stream"
+    qcc_risk_mcp_url: str = "https://agent.qcc.com/mcp/risk/stream"
+    qcc_company_tool_name: str = "get_company_by_query"
+    qcc_company_registration_tool_name: str = "get_company_registration_info"
+    qcc_risk_tool_name: str = "get_business_exception"
+    qcc_mcp_timeout_seconds: float = Field(default=30.0, ge=1, le=120)
+    qcc_max_concurrency: int = Field(default=4, ge=1, le=32)
+    qcc_report_cache_ttl_seconds: int = Field(default=86_400, ge=0, le=31_536_000)
+    qcc_report_cache_ttl: int | None = None
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
@@ -90,6 +102,12 @@ def configure_langsmith(settings: Settings) -> None:
             os.environ["LANGSMITH_API_KEY"] = api_key
 
 
+def qcc_is_enabled(settings: Settings) -> bool:
+    """Resolve the current and legacy feature flags with legacy override support."""
+
+    return settings.qcc_due_diligence_enabled if settings.qcc_enabled is None else settings.qcc_enabled
+
+
 def validate_startup_settings(settings: Settings) -> None:
     """Fail fast on unsafe or incomplete local runtime configuration.
 
@@ -111,6 +129,13 @@ def validate_startup_settings(settings: Settings) -> None:
         errors.append("OPENAI_API_KEY is required when LLM_MODE=openai")
     if settings.max_upload_bytes < 1_024:
         errors.append("MAX_UPLOAD_BYTES must be at least 1024")
-
+    qcc_enabled = qcc_is_enabled(settings)
+    if qcc_enabled and (
+        settings.qcc_api_key is None or not settings.qcc_api_key.get_secret_value().strip()
+    ):
+        errors.append("QCC_API_KEY is required when QCC_DUE_DILIGENCE_ENABLED=true")
+    for name, url in (("QCC_COMPANY_MCP_URL", settings.qcc_company_mcp_url), ("QCC_RISK_MCP_URL", settings.qcc_risk_mcp_url)):
+        if not url.startswith("https://agent.qcc.com/"):
+            errors.append(f"{name} must use the official https://agent.qcc.com/ host")
     if errors:
         raise RuntimeError("启动配置无效：" + "；".join(errors))

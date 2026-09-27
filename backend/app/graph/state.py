@@ -11,6 +11,7 @@ WorkerName = Literal[
     "jd_worker",
     "match_worker",
     "interview_worker",
+    "employer_worker",
     "chat_worker",
 ]
 
@@ -22,6 +23,7 @@ WorkerAction = Literal[
     "submit_interview_answer",
     "continue_interview",
     "end_interview",
+    "run_employer_due_diligence",
 ]
 
 
@@ -38,6 +40,7 @@ class ReadonlyContext(TypedDict, total=False):
     selected_jd: dict[str, Any] | None
     active_interview: dict[str, Any] | None
     pending_interrupt: dict[str, Any] | None
+    employer_investigation: dict[str, Any] | None
 
 
 class CareerGraphState(TypedDict, total=False):

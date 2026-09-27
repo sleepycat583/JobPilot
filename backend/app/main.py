@@ -15,14 +15,15 @@ warnings.filterwarnings(
     category=LangChainPendingDeprecationWarning,
 )
 
-from app.api.routes import events, health, interviews, jds, jobs, local_data, matches, resumes, threads
+from app.api.routes import employer_investigations, events, health, interviews, jds, jobs, local_data, matches, resumes, threads
 from app.core.checkpoint import initialize_checkpoint, open_checkpoint
-from app.core.config import configure_langsmith, get_settings, validate_startup_settings
+from app.core.config import configure_langsmith, get_settings, qcc_is_enabled, validate_startup_settings
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
 from app.services.blob_store import build_blob_store
 from app.services.task_runtime import TaskRuntime
 from app.services.vector_store import VectorStore
+from app.services.qcc_client import QccMcpClient
 
 
 @asynccontextmanager
@@ -51,8 +52,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.vector_store,
             app.state.blob_store,
         )
+        app.state.qcc_client = None
+        if qcc_is_enabled(settings) and settings.qcc_api_key:
+            app.state.qcc_client = QccMcpClient(
+                api_key=settings.qcc_api_key.get_secret_value(),
+                server_urls={"company": settings.qcc_company_mcp_url, "risk": settings.qcc_risk_mcp_url},
+                allowlist={
+                    "company": {settings.qcc_company_tool_name, settings.qcc_company_registration_tool_name},
+                    "risk": {settings.qcc_risk_tool_name},
+                },
+                timeout_seconds=settings.qcc_mcp_timeout_seconds,
+                max_concurrency=settings.qcc_max_concurrency,
+            )
+            await app.state.qcc_client.connect()
         app.state.career_graph = build_career_graph(models, app.state.graph_checkpointer)
-        app.state.graph_runtime = LangGraphRuntime(app.state.career_graph, app.state.session_factory, app.state.runtime)
+        app.state.graph_runtime = LangGraphRuntime(
+            app.state.career_graph,
+            app.state.session_factory,
+            app.state.runtime,
+            app.state.qcc_client,
+            settings.qcc_report_cache_ttl if settings.qcc_report_cache_ttl is not None else settings.qcc_report_cache_ttl_seconds,
+            settings.qcc_company_tool_name,
+            settings.qcc_risk_tool_name,
+            settings.qcc_company_registration_tool_name,
+        )
         await app.state.runtime.recover_pending_jobs()
         await app.state.graph_runtime.recover_incomplete_threads()
         yield
@@ -61,6 +84,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.graph_runtime.shutdown()
         if hasattr(app.state, "runtime"):
             await app.state.runtime.shutdown()
+        if getattr(app.state, "qcc_client", None) is not None:
+            await app.state.qcc_client.close()
         if hasattr(app.state, "vector_store") and app.state.vector_store is not None:
             app.state.vector_store.close()
         checkpoint_manager.__exit__(None, None, None)
@@ -101,7 +126,7 @@ def create_app() -> FastAPI:
             content={"error": {"code": "VALIDATION_ERROR", "message": message, "retryable": False}},
         )
 
-    for router in (health.router, jobs.router, resumes.router, jds.router, threads.router, events.router, matches.router, interviews.router, local_data.router):
+    for router in (health.router, jobs.router, resumes.router, jds.router, threads.router, events.router, matches.router, interviews.router, employer_investigations.router, local_data.router):
         app.include_router(router, prefix=settings.api_prefix)
     return app
 

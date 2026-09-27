@@ -1,11 +1,18 @@
 ﻿[CmdletBinding()]
 param(
+    [Parameter()]
     [ValidateSet('start', 'check', 'stop')]
     [string]$Action = 'start',
+
+    [Parameter()]
     [ValidateRange(1024, 65535)]
     [int]$BackendPort = 8000,
+
+    [Parameter()]
     [ValidateRange(1024, 65535)]
     [int]$FrontendPort = 5173,
+
+    [Parameter()]
     [switch]$SkipInstall
 )
 
@@ -120,7 +127,7 @@ function Assert-Dependencies {
     }
 }
 
-function Ensure-LocalEnv {
+function Initialize-LocalEnv {
     if (Test-Path $BackendEnv) {
         Write-Info '检测到 backend/.env，保持现有配置不变。'
         return
@@ -151,7 +158,10 @@ function Get-ManagedProcess([string]$PidFile) {
 
 function Get-PortOwner([int]$Port) {
     try {
-        return @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        # 检查 IPv4 (127.0.0.1) 和 IPv6 (::1) 环回地址
+        $ipv4Connections = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        $ipv6Connections = @(Get-NetTCPConnection -LocalAddress '::1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        return @($ipv4Connections) + @($ipv6Connections)
     }
     catch {
         return @()
@@ -216,9 +226,9 @@ function Wait-Url([string]$Url, [string]$Label, [int]$TimeoutSeconds = 60) {
 
 function Invoke-HealthCheck {
     $checks = @(
-        @{ Label = '后端存活检查'; Url = "http://127.0.0.1:$BackendPort/api/health/live" },
-        @{ Label = '后端就绪检查'; Url = "http://127.0.0.1:$BackendPort/api/health/ready" },
-        @{ Label = '前端页面检查'; Url = "http://127.0.0.1:$FrontendPort/" }
+        @{ Label = '后端存活检查'; Url = "http://localhost:$BackendPort/api/health/live" },
+        @{ Label = '后端就绪检查'; Url = "http://localhost:$BackendPort/api/health/ready" },
+        @{ Label = '前端页面检查'; Url = "http://localhost:$FrontendPort/" }
     )
     $failed = $false
     foreach ($check in $checks) {
@@ -235,7 +245,7 @@ function Invoke-HealthCheck {
 
 function Start-LocalServices {
     $tools = Assert-Dependencies
-    Ensure-LocalEnv
+    Initialize-LocalEnv
     if ($null -ne (Get-ManagedProcess $BackendPidFile) -or $null -ne (Get-ManagedProcess $FrontendPidFile)) {
         Fail '检测到脚本已经启动的服务。请先执行 -Action stop，或使用 -Action check 查看状态。'
     }
@@ -248,16 +258,17 @@ function Start-LocalServices {
         Invoke-Checked $tools.Npm @('ci') $FrontendDir
     }
     Write-Info '正在执行数据库迁移。'
-    Invoke-Checked $tools.Uv @('run', 'alembic', 'upgrade', 'head') $BackendDir
+    # 业务规则：Windows 下通过 Python 模块执行 CLI，绕过 uv 直接启动 console script 时的 trampoline 路径解析问题。
+    Invoke-Checked $tools.Uv @('run', 'python', '-m', 'alembic', 'upgrade', 'head') $BackendDir
 
     New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
-    $backendOrigin = "http://127.0.0.1:$FrontendPort"
-    $frontendProxy = "http://127.0.0.1:$BackendPort"
+    $backendOrigin = "http://localhost:$FrontendPort"
+    $frontendProxy = "http://localhost:$BackendPort"
     $oldOrigin = $env:FRONTEND_ORIGIN
     $oldProxy = $env:API_PROXY_TARGET
     try {
         $env:FRONTEND_ORIGIN = $backendOrigin
-        $backend = Start-Process -FilePath $tools.Uv -WorkingDirectory $BackendDir -ArgumentList @('run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', [string]$BackendPort) -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru
+        $backend = Start-Process -FilePath $tools.Uv -WorkingDirectory $BackendDir -ArgumentList @('run', 'python', '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', [string]$BackendPort) -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru
         Save-Pid $BackendPidFile $backend.Id
         $env:API_PROXY_TARGET = $frontendProxy
         $frontend = Start-Process -FilePath $tools.Npm -WorkingDirectory $FrontendDir -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', [string]$FrontendPort) -RedirectStandardOutput $FrontendLog -RedirectStandardError $FrontendErrorLog -PassThru
@@ -268,9 +279,9 @@ function Start-LocalServices {
         $env:API_PROXY_TARGET = $oldProxy
     }
     try {
-        Wait-Url "http://127.0.0.1:$BackendPort/api/health/live" '后端存活检查'
-        Wait-Url "http://127.0.0.1:$BackendPort/api/health/ready" '后端就绪检查'
-        Wait-Url "http://127.0.0.1:$FrontendPort/" '前端页面'
+        Wait-Url "http://localhost:$BackendPort/api/health/live" '后端存活检查'
+        Wait-Url "http://localhost:$BackendPort/api/health/ready" '后端就绪检查'
+        Wait-Url "http://localhost:$FrontendPort/" '前端页面'
     }
     catch {
         Write-Host "[local] 启动失败，正在停止本次启动的服务。" -ForegroundColor Yellow
@@ -278,8 +289,8 @@ function Start-LocalServices {
         Stop-ManagedService '前端' $FrontendPidFile
         throw
     }
-    Write-Ok "本地工作台已启动： http://127.0.0.1:$FrontendPort/"
-    Write-Info "OpenAPI： http://127.0.0.1:$BackendPort/docs"
+    Write-Ok "本地工作台已启动： http://localhost:$FrontendPort/"
+    Write-Info "OpenAPI： http://localhost:$BackendPort/docs"
     Write-Info "日志： $RuntimeDir"
 }
 

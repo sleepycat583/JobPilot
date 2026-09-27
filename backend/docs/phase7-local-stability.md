@@ -32,7 +32,7 @@ uv run python scripts/manage_local_data.py restore --input ..\career-agent-backu
 不会输出连接串、模型 payload 或任何密钥。执行恢复前应停止后端进程，恢复后再运行：
 
 ```powershell
-uv run alembic upgrade head
+uv run python -m alembic upgrade head
 uv run pytest
 ```
 

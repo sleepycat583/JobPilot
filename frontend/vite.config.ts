@@ -6,10 +6,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      host: '127.0.0.1',
+      host: 'localhost',
       proxy: {
         '/api': {
-          target: env.API_PROXY_TARGET || 'http://127.0.0.1:8000',
+          target: env.API_PROXY_TARGET || 'http://localhost:8000',
           changeOrigin: true,
         },
       },

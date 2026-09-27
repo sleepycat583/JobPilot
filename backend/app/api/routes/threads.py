@@ -1,4 +1,5 @@
 from uuid import uuid4
+import re
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
@@ -147,6 +148,25 @@ def resume_thread(
     if cached:
         response.status_code = cached[0]
         return ThreadState.model_validate(cached[1])
+    # Employer entity confirmation is resumed by sending the selected credit code
+    # through the same semantic worker flow; it must never bypass主体校验.
+    current_state = load_thread_state(_thread_or_404(session, thread_id))
+    pending = current_state.get("pending_interrupt") or {}
+    if pending.get("type") == "employer_entity_confirmation":
+        if payload.action != "confirm":
+            raise api_error(422, "EMPLOYER_CONFIRMATION_REQUIRED", "请确认企业主体后再继续。")
+        code = str(payload.payload.get("unified_social_credit_code") or "").strip().upper()
+        if not re.fullmatch(r"[0-9A-Z]{18}", code):
+            raise api_error(422, "EMPLOYER_CREDIT_CODE_INVALID", "请提供有效的 18 位统一社会信用代码。")
+        current_state["status"] = "running"
+        current_state["pending_interrupt"] = None
+        current_state["active_run_id"] = str(uuid4())
+        current_state.setdefault("messages", []).append({"id": str(uuid4()), "role": "user", "content": f"确认统一社会信用代码 {code}", "created_at": utc_iso()})
+        save_thread_state(session, _thread_or_404(session, thread_id), current_state)
+        request.app.state.graph_runtime.spawn(
+            request.app.state.graph_runtime.process_message(thread_id, current_state["active_run_id"], f"请对统一社会信用代码 {code} 做投递前雇主背调")
+        )
+        return ThreadState.model_validate(current_state)
     try:
         state = request.app.state.runtime.resume_interrupt(thread_id, payload.interrupt_id, payload.action, payload.payload)
     except ValueError as exc:

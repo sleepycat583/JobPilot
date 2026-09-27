@@ -117,3 +117,22 @@ class InterviewRecord(Base):
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EmployerInvestigationRecord(Base):
+    __tablename__ = "employer_investigations"
+    __table_args__ = (Index("ix_employer_investigations_thread_created", "thread_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(36), index=True)
+    subject_name: Mapped[str] = mapped_column(String(255))
+    unified_social_credit_code: Mapped[str] = mapped_column(String(32), index=True)
+    result_status: Mapped[str] = mapped_column(String(32), index=True)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    provider_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    queried_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    @property
+    def status(self) -> str:
+        return self.result_status

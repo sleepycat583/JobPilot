@@ -175,7 +175,7 @@ docker compose down
 ```powershell
 cd backend
 uv run pytest
-uv run alembic check
+uv run python -m alembic check
 
 cd ..\frontend
 npm run typecheck

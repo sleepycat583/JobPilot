@@ -26,7 +26,7 @@
 ## 工程回归
 
 - `uv run pytest`：75 passed
-- `uv run alembic check`：No new upgrade operations detected
+- `uv run python -m alembic check`：No new upgrade operations detected
 - `npm run build`：通过
 
 评测输出文件仅作为本地临时证据保留，未纳入 Git，避免将业务文本或运行数据提交到仓库。

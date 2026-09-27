@@ -248,7 +248,8 @@ function Start-LocalServices {
         Invoke-Checked $tools.Npm @('ci') $FrontendDir
     }
     Write-Info '正在执行数据库迁移。'
-    Invoke-Checked $tools.Uv @('run', 'alembic', 'upgrade', 'head') $BackendDir
+    # 业务规则：Windows 下通过 Python 模块执行 CLI，绕过 uv 直接启动 console script 时的 trampoline 路径解析问题。
+    Invoke-Checked $tools.Uv @('run', 'python', '-m', 'alembic', 'upgrade', 'head') $BackendDir
 
     New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
     $backendOrigin = "http://127.0.0.1:$FrontendPort"
@@ -257,7 +258,7 @@ function Start-LocalServices {
     $oldProxy = $env:API_PROXY_TARGET
     try {
         $env:FRONTEND_ORIGIN = $backendOrigin
-        $backend = Start-Process -FilePath $tools.Uv -WorkingDirectory $BackendDir -ArgumentList @('run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', [string]$BackendPort) -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru
+        $backend = Start-Process -FilePath $tools.Uv -WorkingDirectory $BackendDir -ArgumentList @('run', 'python', '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', [string]$BackendPort) -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru
         Save-Pid $BackendPidFile $backend.Id
         $env:API_PROXY_TARGET = $frontendProxy
         $frontend = Start-Process -FilePath $tools.Npm -WorkingDirectory $FrontendDir -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', [string]$FrontendPort) -RedirectStandardOutput $FrontendLog -RedirectStandardError $FrontendErrorLog -PassThru

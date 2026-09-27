@@ -72,8 +72,8 @@ GitHub 发布前的安全、历史清理和贡献者检查见 [`docs/github-rele
 cd backend
 Copy-Item .env.example .env
 uv sync --dev
-uv run alembic upgrade head
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run python -m alembic upgrade head
+uv run python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 OpenAPI：`http://127.0.0.1:8000/docs`
@@ -177,7 +177,7 @@ PostgreSQL 环境准备好后，可运行 `backend/scripts/check_postgres_checkp
 ```powershell
 cd backend
 uv run pytest
-uv run alembic check
+uv run python -m alembic check
 
 cd ..\frontend
 npm run typecheck

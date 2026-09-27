@@ -14,8 +14,8 @@
 
 ```powershell
 cd backend
-uv run alembic upgrade head
-uv run alembic check
+uv run python -m alembic upgrade head
+uv run python -m alembic check
 uv run pytest
 
 cd ..\frontend

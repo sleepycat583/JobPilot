@@ -7,7 +7,7 @@
 | 检查 | 结果 |
 |---|---|
 | `uv run pytest` | 通过，75 passed |
-| `uv run alembic check` | 通过，No new upgrade operations detected |
+| `uv run python -m alembic check` | 通过，No new upgrade operations detected |
 | `npm run typecheck` | 通过 |
 | `npm run build` | 通过，Vite production build |
 | PowerShell `local.ps1` 语法解析 | 通过 |

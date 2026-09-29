@@ -2492,3 +2492,22 @@ a.history-item:visited {
   .cleanup-controls { align-items: stretch; flex-wrap: wrap; }
   .cleanup-controls .danger { margin-left: 0; }
 }
+
+/* 打字机效果 - 流式消息的光标动画 */
+.message.streaming .cursor {
+  display: inline-block;
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* 流式消息样式优化 */
+.message.streaming p {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}

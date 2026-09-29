@@ -8,7 +8,7 @@ import { api } from '../../lib/api/client'
 export function ChatPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { threadId, state, selectedResumeId, selectedJDId, cancelActiveRun } = useWorkspace()
+  const { threadId, state, selectedResumeId, selectedJDId, streamingMessage, cancelActiveRun } = useWorkspace()
   const [composer, setComposer] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const send = useMutation({
@@ -26,7 +26,7 @@ export function ChatPage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [running, state?.messages])
+  }, [running, state?.messages, streamingMessage])
 
   const submit = () => {
     const content = composer.trim()
@@ -42,8 +42,13 @@ export function ChatPage() {
         <button type="button" onClick={() => navigate('/interview')}><Mic2 size={18} /><span><strong>模拟面试</strong><small>按目标岗位进行练习</small></span></button>
       </div></div>}
       <div className="message-list" aria-live="polite">
-        {state?.messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? 'AI' : '林'}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'assistant' ? '求职助手' : '你'}</strong><span>{new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><p>{message.content}</p></div></article>)}
-        {running && <article className="message assistant"><div className="message-avatar">AI</div><div className="message-content"><div className="message-meta"><strong>求职助手</strong></div><div className="typing-indicator"><span /><span /><span /></div><button className="text-button" type="button" onClick={() => void cancelActiveRun()}><XCircle size={15} />取消本轮任务</button></div></article>}
+        {state?.messages.map((message) => {
+          // 完成事件会先到达 SSE，再触发状态刷新；动画期间隐藏同 ID 的正式消息，避免重复渲染。
+          if (streamingMessage?.id === message.id) return null
+          return <article key={message.id} className={`message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? 'AI' : '林'}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'assistant' ? '求职助手' : '你'}</strong><span>{new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><p>{message.content}</p></div></article>
+        })}
+        {streamingMessage && <article className="message assistant streaming"><div className="message-avatar">AI</div><div className="message-content"><div className="message-meta"><strong>求职助手</strong></div><p>{streamingMessage.content}<span className="cursor">▋</span></p></div></article>}
+        {running && !streamingMessage && <article className="message assistant"><div className="message-avatar">AI</div><div className="message-content"><div className="message-meta"><strong>求职助手</strong></div><div className="typing-indicator"><span /><span /><span /></div><button className="text-button" type="button" onClick={() => void cancelActiveRun()}><XCircle size={15} />取消本轮任务</button></div></article>}
         {send.error && <p className="inline-error">{send.error.message}</p>}
         <div ref={endRef} />
       </div>

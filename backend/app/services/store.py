@@ -69,6 +69,8 @@ def append_event(
     event_type: str,
     data: dict[str, Any],
 ) -> ExecutionEventRecord:
+    from app.core.event_notifier import get_event_notifier
+
     event = ExecutionEventRecord(
         stream_type=stream_type,
         stream_id=stream_id,
@@ -78,6 +80,10 @@ def append_event(
     session.add(event)
     session.commit()
     session.refresh(event)
+
+    # 触发事件通知，立即唤醒等待的 SSE 连接
+    get_event_notifier().notify_new_event(stream_type, stream_id)
+
     return event
 
 

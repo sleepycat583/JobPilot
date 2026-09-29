@@ -225,6 +225,40 @@ def test_jd_parse_and_chat_events(client: TestClient) -> None:
     assert state["task"]["title"] == "对话 Worker 已完成"
 
 
+def test_chat_stream_events_are_forwarded_before_graph_completion(client: TestClient) -> None:
+    """验证 LangGraph custom stream 会在最终状态前写入多个增量事件。"""
+
+    class StreamingGraph:
+        async def astream(self, _input: dict[str, Any], _config: dict[str, Any], *, stream_mode: list[str]):
+            assert stream_mode == ["values", "custom"]
+            yield ("custom", {"type": "public_output_delta", "delta": "第一段"})
+            await asyncio.sleep(0.001)
+            yield ("custom", {"type": "public_output_delta", "delta": "第二段"})
+            yield (
+                "values",
+                {
+                    "worker_name": "chat_worker",
+                    "worker_result": {"action": "respond"},
+                    "public_output": "第一段第二段",
+                },
+            )
+
+    thread_id = create_thread(client)
+    client.app.state.graph_runtime.graph = StreamingGraph()
+    response = client.post(
+        f"/api/threads/{thread_id}/messages",
+        headers=key(),
+        json={"content": "测试真实增量事件"},
+    )
+    assert response.status_code == 202
+    state = wait_for_thread(client, thread_id, "completed")
+    assert state["messages"][-1]["content"] == "第一段第二段"
+    with client.app.state.session_factory() as session:
+        records = session.query(ExecutionEventRecord).filter_by(stream_id=thread_id).all()
+    deltas = [loads(record.payload_json, {})["delta"] for record in records if record.event_type == "message_delta"]
+    assert deltas == ["第一段", "第二段"]
+
+
 def test_low_match_interrupt_can_resume(client: TestClient) -> None:
     thread_id = create_thread(client)
     resume_id, jd_id = create_resume(client), create_jd(client)
@@ -405,6 +439,14 @@ def test_sse_serialization_and_persisted_payloads_are_sanitized(client: TestClie
     session_factory = client.app.state.session_factory
     with session_factory() as session:
         records = session.query(ExecutionEventRecord).filter_by(stream_id=thread_id).all()
+    delta_records = [record for record in records if record.event_type == "message_delta"]
+    completed_records = [record for record in records if record.event_type == "message_completed"]
+    assert len(delta_records) > 1
+    assert len(completed_records) == 1
+    delta_payloads = [loads(record.payload_json, {}) for record in delta_records]
+    completed_payload = loads(completed_records[0].payload_json, {})
+    assert {payload["message_id"] for payload in delta_payloads} == {completed_payload["message_id"]}
+    assert "".join(payload["delta"] for payload in delta_payloads) == completed_payload["message"]["content"]
     serialized = json.dumps([loads(record.payload_json, {}) for record in records], ensure_ascii=False).lower()
     for forbidden in ("prompt", "tool_call", "raw_state", "api_key", "route_audit", "confidence"):
         assert forbidden not in serialized

@@ -105,6 +105,7 @@ def build_model_bundle(settings: Settings) -> ModelBundle:
         "temperature": 0,
         "timeout": 30,
         "max_retries": 2,
+        "streaming": True,  # 启用流式输出,支持打字机效果
     }
     if settings.openai_base_url and settings.openai_base_url.strip():
         model_kwargs["base_url"] = settings.openai_base_url.strip()

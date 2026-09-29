@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -60,11 +61,79 @@ def build_worker_update(worker: WorkerName, state: CareerGraphState, models: Mod
     }
 
 
+def _chunk_text(content: Any) -> str:
+    """提取 ChatModel 流式 chunk 中的纯文本，过滤工具调用等非文本内容。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
+    return ""
+
+
+async def build_worker_update_stream(worker: WorkerName, state: CareerGraphState, models: ModelBundle) -> dict[str, Any]:
+    """先完成内部 action 决策，再仅对 respond 文本进行 token 级流式生成。
+
+    action 决策仍使用结构化输出，避免把 JSON 或工具调用暴露给用户；只有
+    `respond` 分支会调用普通文本流，并通过 LangGraph custom stream 发送增量。
+    """
+    if models.worker_model is None:
+        return build_worker_update(worker, state, models)
+
+    context = state.get("readonly_context", {})
+    input_payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    runnable = models.worker_model.with_structured_output(WorkerDecision, method="function_calling")
+    decision_result = await runnable.ainvoke(
+        [
+            SystemMessage(content=WORKER_PROMPTS[worker]),
+            HumanMessage(content=f"只读上下文：{input_payload}"),
+        ]
+    )
+    decision = decision_result if isinstance(decision_result, WorkerDecision) else WorkerDecision.model_validate(decision_result)
+    action = decision.action if decision.action in ALLOWED_ACTIONS[worker] else "respond"
+
+    if action != "respond":
+        output = decision.message.strip() or "正在执行你的请求。"
+    else:
+        writer = get_stream_writer()
+        response_messages = [
+            SystemMessage(
+                content=(
+                    f"{WORKER_PROMPTS[worker]}\n"
+                    "现在只生成最终给用户看的自然语言回答。不要输出 JSON、action、工具调用或内部字段。"
+                )
+            ),
+            HumanMessage(content=f"只读上下文：{input_payload}"),
+        ]
+        parts: list[str] = []
+        async for chunk in models.worker_model.astream(response_messages):
+            text = _chunk_text(getattr(chunk, "content", ""))
+            if not text:
+                continue
+            parts.append(text)
+            writer({"type": "public_output_delta", "delta": text})
+        output = "".join(parts).strip() or decision.message.strip() or "正在执行你的请求。"
+
+    return {
+        "messages": [AIMessage(content=output, name=worker)],
+        "worker_name": worker,
+        "worker_result": {"kind": "worker_decision", "worker": worker, "action": action},
+        "visible_output": output,
+    }
+
+
 def build_worker_graph(worker: WorkerName, models: ModelBundle):
     builder = StateGraph(CareerGraphState)
 
-    def run_worker(state: CareerGraphState) -> dict[str, Any]:
-        return build_worker_update(worker, state, models)
+    if models.worker_model is None:
+        def run_worker(state: CareerGraphState) -> dict[str, Any]:
+            return build_worker_update(worker, state, models)
+    else:
+        async def run_worker(state: CareerGraphState) -> dict[str, Any]:
+            return await build_worker_update_stream(worker, state, models)
 
     builder.add_node("run", run_worker)
     builder.add_edge(START, "run")

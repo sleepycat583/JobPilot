@@ -16,8 +16,9 @@ warnings.filterwarnings(
 )
 
 from app.api.routes import employer_investigations, events, health, interviews, jds, jobs, local_data, matches, resumes, threads
-from app.core.checkpoint import initialize_checkpoint, open_checkpoint
+from app.core.checkpoint import initialize_checkpoint_async, open_async_checkpoint
 from app.core.config import configure_langsmith, get_settings, qcc_is_enabled, validate_startup_settings
+from app.core.event_notifier import get_event_notifier
 from app.db import Base, build_engine, build_session_factory
 from app.graph import LangGraphRuntime, build_career_graph, build_model_bundle
 from app.services.blob_store import build_blob_store
@@ -31,6 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     validate_startup_settings(settings)
     configure_langsmith(settings)
+
+    # 初始化事件通知器的事件循环
+    import asyncio
+    get_event_notifier().set_event_loop(asyncio.get_running_loop())
     app_blob_store = build_blob_store(settings)
     engine = build_engine(settings)
     if settings.auto_create_schema:
@@ -39,57 +44,56 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.blob_store = app_blob_store
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
-    checkpoint_manager = open_checkpoint(settings)
-    app.state.graph_checkpointer = checkpoint_manager.__enter__()
-    try:
-        initialize_checkpoint(app.state.graph_checkpointer, settings)
-        models = build_model_bundle(settings)
-        app.state.vector_store = VectorStore(settings) if settings.llm_mode == "openai" else None
-        app.state.runtime = TaskRuntime(
-            app.state.session_factory,
-            settings,
-            models.worker_model,
-            app.state.vector_store,
-            app.state.blob_store,
-        )
-        app.state.qcc_client = None
-        if qcc_is_enabled(settings) and settings.qcc_api_key:
-            app.state.qcc_client = QccMcpClient(
-                api_key=settings.qcc_api_key.get_secret_value(),
-                server_urls={"company": settings.qcc_company_mcp_url, "risk": settings.qcc_risk_mcp_url},
-                allowlist={
-                    "company": {settings.qcc_company_tool_name, settings.qcc_company_registration_tool_name},
-                    "risk": {settings.qcc_risk_tool_name},
-                },
-                timeout_seconds=settings.qcc_mcp_timeout_seconds,
-                max_concurrency=settings.qcc_max_concurrency,
+    async with open_async_checkpoint(settings) as graph_checkpointer:
+        app.state.graph_checkpointer = graph_checkpointer
+        try:
+            await initialize_checkpoint_async(app.state.graph_checkpointer, settings)
+            models = build_model_bundle(settings)
+            app.state.vector_store = VectorStore(settings) if settings.llm_mode == "openai" else None
+            app.state.runtime = TaskRuntime(
+                app.state.session_factory,
+                settings,
+                models.worker_model,
+                app.state.vector_store,
+                app.state.blob_store,
             )
-            await app.state.qcc_client.connect()
-        app.state.career_graph = build_career_graph(models, app.state.graph_checkpointer)
-        app.state.graph_runtime = LangGraphRuntime(
-            app.state.career_graph,
-            app.state.session_factory,
-            app.state.runtime,
-            app.state.qcc_client,
-            settings.qcc_report_cache_ttl if settings.qcc_report_cache_ttl is not None else settings.qcc_report_cache_ttl_seconds,
-            settings.qcc_company_tool_name,
-            settings.qcc_risk_tool_name,
-            settings.qcc_company_registration_tool_name,
-        )
-        await app.state.runtime.recover_pending_jobs()
-        await app.state.graph_runtime.recover_incomplete_threads()
-        yield
-    finally:
-        if hasattr(app.state, "graph_runtime"):
-            await app.state.graph_runtime.shutdown()
-        if hasattr(app.state, "runtime"):
-            await app.state.runtime.shutdown()
-        if getattr(app.state, "qcc_client", None) is not None:
-            await app.state.qcc_client.close()
-        if hasattr(app.state, "vector_store") and app.state.vector_store is not None:
-            app.state.vector_store.close()
-        checkpoint_manager.__exit__(None, None, None)
-        engine.dispose()
+            app.state.qcc_client = None
+            if qcc_is_enabled(settings) and settings.qcc_api_key:
+                app.state.qcc_client = QccMcpClient(
+                    api_key=settings.qcc_api_key.get_secret_value(),
+                    server_urls={"company": settings.qcc_company_mcp_url, "risk": settings.qcc_risk_mcp_url},
+                    allowlist={
+                        "company": {settings.qcc_company_tool_name, settings.qcc_company_registration_tool_name},
+                        "risk": {settings.qcc_risk_tool_name},
+                    },
+                    timeout_seconds=settings.qcc_mcp_timeout_seconds,
+                    max_concurrency=settings.qcc_max_concurrency,
+                )
+                await app.state.qcc_client.connect()
+            app.state.career_graph = build_career_graph(models, app.state.graph_checkpointer)
+            app.state.graph_runtime = LangGraphRuntime(
+                app.state.career_graph,
+                app.state.session_factory,
+                app.state.runtime,
+                app.state.qcc_client,
+                settings.qcc_report_cache_ttl if settings.qcc_report_cache_ttl is not None else settings.qcc_report_cache_ttl_seconds,
+                settings.qcc_company_tool_name,
+                settings.qcc_risk_tool_name,
+                settings.qcc_company_registration_tool_name,
+            )
+            await app.state.runtime.recover_pending_jobs()
+            await app.state.graph_runtime.recover_incomplete_threads()
+            yield
+        finally:
+            if hasattr(app.state, "graph_runtime"):
+                await app.state.graph_runtime.shutdown()
+            if hasattr(app.state, "runtime"):
+                await app.state.runtime.shutdown()
+            if getattr(app.state, "qcc_client", None) is not None:
+                await app.state.qcc_client.close()
+            if hasattr(app.state, "vector_store") and app.state.vector_store is not None:
+                app.state.vector_store.close()
+            engine.dispose()
 
 
 def create_app() -> FastAPI:

@@ -20,11 +20,12 @@ def test_official_supervisor_hands_off_to_exactly_one_worker(worker: WorkerName)
     models = ModelBundle(mode="stub", supervisor_model=StubSupervisorModel(route=worker), worker_model=None)
     with SqliteSaver.from_conn_string(":memory:") as saver:
         graph = build_career_graph(models, saver)
+        # 使用英文消息避免 Windows 中文环境下的编码问题
         result = graph.invoke(
             {
-                "messages": [HumanMessage(content="同一段输入不参与 Stub 路由判断")],
+                "messages": [HumanMessage(content="Same input for stub routing test")],
                 "remaining_steps": 30,
-                "readonly_context": {"latest_user_message": "同一段输入不参与 Stub 路由判断"},
+                "readonly_context": {"latest_user_message": "Same input for stub routing test"},
                 "run_id": str(uuid4()),
                 "route_audit": None,
                 "worker_name": None,
@@ -34,11 +35,11 @@ def test_official_supervisor_hands_off_to_exactly_one_worker(worker: WorkerName)
             },
             {"configurable": {"thread_id": str(uuid4())}},
         )
-    assert result["worker_name"] == worker
-    assert result["route_audit"]["worker"] == worker
-    assert result["public_output"] == STUB_OUTPUTS[worker]
-    assert "FINISH" not in result["public_output"]
-    assert "tool_call" not in result["public_output"]
+        assert result["worker_name"] == worker
+        assert result["route_audit"]["worker"] == worker
+        assert result["public_output"] == STUB_OUTPUTS[worker]
+        assert "FINISH" not in result["public_output"]
+        assert "tool_call" not in result["public_output"]
 
 
 def test_graph_contains_supervisor_and_all_worker_nodes() -> None:
@@ -46,7 +47,7 @@ def test_graph_contains_supervisor_and_all_worker_nodes() -> None:
     with SqliteSaver.from_conn_string(":memory:") as saver:
         graph = build_career_graph(models, saver)
         node_names = set(graph.get_graph().nodes)
-    assert {"supervisor", *WORKER_DESCRIPTIONS}.issubset(node_names)
+        assert {"supervisor", *WORKER_DESCRIPTIONS}.issubset(node_names)
 
 
 def test_worker_and_output_nodes_respect_state_ownership() -> None:

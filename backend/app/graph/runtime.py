@@ -212,6 +212,7 @@ class LangGraphRuntime:
         # 决策不会直接暴露给前端，避免半截 JSON 或工具调用污染用户消息。
         final_state = None
         streamed_content = ""
+        delta_index = 0
 
         async for chunk in self.graph.astream(graph_input, config, stream_mode=["values", "custom"]):
             if isinstance(chunk, tuple) and len(chunk) == 2:
@@ -227,8 +228,14 @@ class LangGraphRuntime:
                                     stream_type="thread",
                                     stream_id=thread_id,
                                     event_type="message_delta",
-                                    data={"run_id": run_id, "message_id": message_id, "delta": delta},
+                                    data={
+                                        "run_id": run_id,
+                                        "message_id": message_id,
+                                        "index": delta_index,
+                                        "delta": delta,
+                                    },
                                 )
+                            delta_index += 1
                 elif mode == "values":
                     final_state = payload
             else:
@@ -325,7 +332,7 @@ class LangGraphRuntime:
         if not content:
             return
         characters = list(content)
-        for start in range(0, len(characters), STREAM_DELTA_CHARS):
+        for index, start in enumerate(range(0, len(characters), STREAM_DELTA_CHARS)):
             delta = "".join(characters[start : start + STREAM_DELTA_CHARS])
             with self.session_factory() as session:
                 append_event(
@@ -333,7 +340,12 @@ class LangGraphRuntime:
                     stream_type="thread",
                     stream_id=thread_id,
                     event_type="message_delta",
-                    data={"run_id": run_id, "message_id": message_id, "delta": delta},
+                    data={
+                        "run_id": run_id,
+                        "message_id": message_id,
+                        "index": index,
+                        "delta": delta,
+                    },
                 )
             if start + STREAM_DELTA_CHARS < len(characters):
                 await asyncio.sleep(STREAM_DELTA_DELAY_SECONDS)

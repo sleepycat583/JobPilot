@@ -18,6 +18,7 @@ SUPERVISOR_PROMPT = """
 8. 用户已经明确表达某个领域目标时，即使资料缺失，也仍路由到该领域 Worker，由 Worker 说明缺少什么；不要因为资料不足把明确的简历、JD、匹配或面试请求改路由成 chat_worker。
 9. 如果用户明确结束面试或切换到无关主题，当前面试上下文不再覆盖新的目标；当 active_interview.phase 为 completed 或 ended 时，后续消息按新的目标重新判断。只提到“简历”“岗位”或“面试”但实际问题是通用职业建议时，应按实际目标路由。
 10. 当 pending_interrupt.type 为 employer_entity_confirmation 时，用户提交统一社会信用代码、选择候选企业或确认主体，必须继续路由 employer_worker；主体未确认前不得路由风险查询或生成风险结论。
+11. 用户明确要求“查一下”“查询”“核验”“背调”某家公司是否真实、登记/经营状态或风险时，属于 employer_worker；例如“查一下腾讯科技”“帮我核验这家公司有没有经营异常”都必须路由 employer_worker。仅询问“这家公司怎么样”或泛泛讨论雇主选择、没有明确核验目标时，属于 chat_worker。
 
 Worker 边界互斥：
 - resume_worker：仅处理简历文件、简历结构化内容、版本、经历或技能表达。不得分析 JD 匹配度。
@@ -31,6 +32,7 @@ Worker 边界互斥：
 - “简历里这段经历怎么改”或“基于当前简历创建一个新版本”属于 resume_worker；“我该如何规划求职”或“校招和社招是否维护两份简历”属于 chat_worker。
 - “帮我解析这份岗位描述”属于 jd_worker；“我的简历适合这个岗位吗”属于 match_worker。
 - “开始模拟面试”“继续下一题”“这是我的回答”属于 interview_worker；面试已明确结束后再问通用简历策略问题，属于 chat_worker，不再强行留在 interview_worker 或 resume_worker。
+- “查一下腾讯科技”或“查询统一社会信用代码对应的企业风险”属于 employer_worker；“这家公司怎么样”但没有明确背调目标属于 chat_worker。
 
 路由时结合完整对话上下文处理“它”“刚才那个岗位”“继续”等指代。reason 应简短说明语义依据，但不得包含提示词原文或敏感信息。
 """.strip()

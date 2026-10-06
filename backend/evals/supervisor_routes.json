@@ -202,6 +202,57 @@
     "message": "这题我暂时跳过，下一题吧。"
   },
   {
+    "id": "employer_company_lookup",
+    "category": "employer_worker",
+    "expected_worker": "employer_worker",
+    "history": [],
+    "message": "查一下腾讯科技，看看企业是否真实、经营状态和风险信息。"
+  },
+  {
+    "id": "employer_company_lookup_short",
+    "category": "employer_worker",
+    "expected_worker": "employer_worker",
+    "history": [],
+    "message": "查一下腾讯科技"
+  },
+  {
+    "id": "employer_credit_code_lookup",
+    "category": "employer_worker",
+    "expected_worker": "employer_worker",
+    "history": [],
+    "message": "帮我核验统一社会信用代码 91110108MA01234567 对应企业的经营异常和风险。"
+  },
+  {
+    "id": "employer_entity_confirmation",
+    "category": "employer_worker",
+    "expected_worker": "employer_worker",
+    "history": [
+      {"role": "assistant", "content": "找到多个企业主体，请确认统一社会信用代码后再继续。"}
+    ],
+    "context": {
+      "pending_interrupt": {
+        "type": "employer_entity_confirmation",
+        "title": "确认企业主体",
+        "detail": "请选择正确企业。"
+      }
+    },
+    "message": "我确认第一个企业主体，继续查询它的风险。"
+  },
+  {
+    "id": "employer_risk_only",
+    "category": "employer_worker",
+    "expected_worker": "employer_worker",
+    "history": [],
+    "message": "帮我做投递前雇主背调，重点核验这家企业有没有经营异常和被执行风险。"
+  },
+  {
+    "id": "chat_employer_general_opinion",
+    "category": "chat_worker",
+    "expected_worker": "chat_worker",
+    "history": [],
+    "message": "这家公司怎么样？我只是想了解一下求职时如何判断雇主。"
+  },
+  {
     "id": "chat_career_advice",
     "category": "chat_worker",
     "expected_worker": "chat_worker",

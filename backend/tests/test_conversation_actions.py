@@ -1,4 +1,5 @@
 import asyncio
+from threading import Event
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -13,6 +14,50 @@ def test_extract_employer_query_removes_conversational_wrapping() -> None:
     assert extract_employer_query("调用你的工具查一下字节跳动这家公司") == "字节跳动"
     assert extract_employer_query("请查询腾讯科技（深圳）有限公司") == "腾讯科技（深圳）有限公司"
     assert extract_employer_query("91110000100000000X") == "91110000100000000X"
+
+
+def test_employer_confirmation_resumes_graph_from_sync_route(client: TestClient) -> None:
+    thread_id = create_thread(client)
+    resumed = Event()
+    runtime = client.app.state.graph_runtime
+
+    async def capture_message(resumed_thread_id: str, _run_id: str, content: str) -> None:
+        assert resumed_thread_id == thread_id
+        assert "91110000100000000X" in content
+        resumed.set()
+
+    runtime.process_message = capture_message
+    with client.app.state.session_factory() as session:
+        thread = session.get(ThreadRecord, thread_id)
+        assert thread is not None
+        state = load_thread_state(thread)
+        state.update(
+            {
+                "status": "interrupted",
+                "pending_interrupt": {
+                    "id": "employer-confirmation",
+                    "type": "employer_entity_confirmation",
+                    "title": "确认企业主体",
+                    "detail": "请选择正确企业。",
+                    "accepted_actions": ["confirm"],
+                    "data": {"candidates": []},
+                },
+            }
+        )
+        save_thread_state(session, thread, state)
+
+    response = client.post(
+        f"/api/threads/{thread_id}/resume",
+        headers=key(),
+        json={
+            "interrupt_id": "employer-confirmation",
+            "action": "confirm",
+            "payload": {"unified_social_credit_code": "91110000100000000X"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert resumed.wait(timeout=2)
 
 
 class ActionGraph:

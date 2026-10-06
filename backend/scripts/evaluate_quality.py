@@ -26,6 +26,7 @@ EXPECTED_ACTIONS: dict[WorkerName, frozenset[str]] = {
     "interview_worker": frozenset(
         {"respond", "start_interview", "submit_interview_answer", "continue_interview", "end_interview"}
     ),
+    "employer_worker": frozenset({"respond", "run_employer_due_diligence"}),
     "chat_worker": frozenset({"respond"}),
 }
 

@@ -119,6 +119,8 @@ def test_supervisor_prompt_enforces_route_only_boundary() -> None:
     assert "明确结束面试" in SUPERVISOR_PROMPT
     assert "employer_entity_confirmation" in SUPERVISOR_PROMPT
     assert "统一社会信用代码" in SUPERVISOR_PROMPT
+    assert "查一下腾讯科技" in SUPERVISOR_PROMPT
+    assert "employer_worker" in SUPERVISOR_PROMPT
 
 
 def test_supervisor_receives_active_interview_routing_context() -> None:

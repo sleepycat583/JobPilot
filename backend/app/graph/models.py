@@ -18,6 +18,7 @@ WORKER_NAMES: tuple[WorkerName, ...] = (
     "jd_worker",
     "match_worker",
     "interview_worker",
+    "employer_worker",
     "chat_worker",
 )
 

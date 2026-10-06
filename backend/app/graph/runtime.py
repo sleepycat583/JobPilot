@@ -59,12 +59,23 @@ class LangGraphRuntime:
                 company_registration_tool_name,
             ) if task_runtime is not None else None
         )
+        self.loop = asyncio.get_running_loop()
         self.tasks: set[asyncio.Task[None]] = set()
 
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.create_task(coroutine)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+        """将后台协程投递到应用 lifespan 的事件循环。
+
+        参数 `coroutine` 是待执行的对话/背调工作；方法无返回值，生命周期由
+        runtime 跟踪。同步 FastAPI 路由可能在工作线程调用本方法，必须回到
+        初始化 runtime 的事件循环创建 Task。
+        """
+
+        def create_task() -> None:
+            task = self.loop.create_task(coroutine)
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
+
+        self.loop.call_soon_threadsafe(create_task)
 
     async def process_employer_due_diligence(self, thread_id: str, run_id: str, content: str) -> None:
         if self.action_service is None:

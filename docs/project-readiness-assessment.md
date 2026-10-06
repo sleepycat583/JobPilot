@@ -1,6 +1,6 @@
 # JobPilot 项目完成度评估与开发指导
 
-**评估时间**：2026-10-05（最后更新）  
+**评估时间**：2026-10-05（重新复核）
 **评估范围**：后端（FastAPI + LangGraph）+ 前端（React + Vite）  
 **评估方法**：代码审查 + 测试运行 + 文档验证
 
@@ -10,13 +10,14 @@
 
 **当前阶段**：**可演示级（Demo-Ready）**
 
-JobPilot 已实现核心多智能体架构和主流程（简历解析→JD 分析→匹配评分→模拟面试），但距离"可投递"状态还需要 0.5-1 天工作量。主要差距：缺少演示视频和量化指标。
+JobPilot 已实现核心多智能体架构和主流程（简历解析→JD 分析→匹配评分→模拟面试），后端回归测试和前端构建验证当前均已通过。距离“可投递”状态仍需要补齐真实模型业务评估、量化指标和完整演示视频。
 
 **关键数据**：
 - 后端代码：~3300 行（不含测试）
 - 前端代码：~400 行
-- 测试覆盖：93 个用例，**93 通过，0 跳过**
-- 验证结果：checkpoint、SSE、幂等性和 Supervisor 路由测试均已实际执行
+- 后端测试：96 个用例，**96 通过，0 失败，0 跳过**（10.03 秒）
+- 关键回归组：graph/checkpoint/API 共 48 个用例，**48 通过**（6.99 秒）
+- 前端验证：`npm run typecheck` 和 `npm run build` 均通过
 - 评估集：93 个 Supervisor 路由样本（未运行）
 - 文档：11 个 Markdown 文件（架构、roadmap、测试修复报告）
 
@@ -49,34 +50,32 @@ JobPilot 已实现核心多智能体架构和主流程（简历解析→JD 分�
    - ChromaDB 1.5.9：[app/services/vector_store.py](backend/app/services/vector_store.py)
    - 匹配证据引用
 
-5. **测试覆盖完整**
-   - 测试通过率：**100%**（93 passed, 0 skipped）
-   - checkpoint、SSE、幂等性和 Supervisor 路由测试均未跳过
-   - 核心业务逻辑：完全覆盖（简历/JD/匹配/面试/背调）
-   - 详见：[test-fixes-2026-10-05.md](docs/test-fixes-2026-10-05.md)
+5. **测试与构建验证已通过**
+   - 后端回归测试：**100%**（96 passed, 0 failed, 0 skipped）
+   - graph/checkpoint/API 关键回归组：48 passed，覆盖 Supervisor 路由、异步 checkpoint、SSE、流式、取消和幂等性
+   - 前端 TypeScript 类型检查和生产构建均通过
+   - 注意：这里的“通过”表示现有测试和构建验证通过，不等同于已生成代码覆盖率报告或完成真实模型业务评估
+   - 详见：[test-fixes-2026-10-05.md](test-fixes-2026-10-05.md)
 
 6. **本地部署工具**
    - Windows 一键启动：[scripts/local.ps1](scripts/local.ps1)
    - Docker Compose 单实例：[docker-compose.yml](docker-compose.yml)
    - 备份恢复脚本：[backend/scripts/manage_local_data.py](backend/scripts/manage_local_data.py)
 
-**❌ 未完成的关键部分：**
+**⚠️ 尚未完成、仍需补齐的关键部分：**
 
-1. ~~**12 个测试失败（87% → 需达到 95%+）**~~ ✅ **已完成**
-   - ~~`test_graph.py`：6 个 Supervisor 测试失败（中文编码问题）~~
-   - ~~`test_api.py`：6 个 SSE/checkpoint 测试失败~~
-   - ~~影响：技术可信度不足~~
-   - **修复结果**：100% 通过率（93 passed, 0 skipped）
-   - **验证结果**：当前锁定依赖组合下，原先被跳过的 12 个测试已恢复执行并全部通过
-   - **详见**：[test-fixes-2026-10-05.md](test-fixes-2026-10-05.md)
+1. **真实模型业务评估尚未完成**
+   - 当前 96 个后端测试使用 Stub/隔离依赖验证代码行为，不能替代真实 LLM、外部雇主数据服务和端到端业务验证
+   - `evaluate_business_flows.py` 尚未产生可引用的通过率结果
+   - 雇主背调多候选 HITL 流程仍需在真实或接近生产的配置下验证
 
-3. **缺少量化指标**
+2. **缺少量化指标**
    - 无测试覆盖率报告（需要 70%+）
    - 无路由准确率（需要 90%+）
    - 无业务流程通过率（需要 85%+）
    - 无延迟统计（P95）
 
-4. **无演示视频**
+3. **无演示视频**
    - 只有 Playwright 截图（`output/playwright/phase8-*.png`）
    - 面试时需要 3 分钟完整流程演示
 
@@ -231,7 +230,7 @@ runnable = models.worker_model.with_structured_output(WorkerDecision, method="fu
 
 | ID | 任务 | 问题 | 工作量 | 验收标准 |
 |---|---|---|---|---|
-| **P0-1** | ~~修复 12 个失败测试~~ ✅ | ~~已完成：93 个测试全部执行并通过~~ | ~~4-6h~~ 已完成 | ✅ 93 passed, 0 skipped |
+| **P0-1** | ~~修复 checkpoint/SSE 回归测试~~ ✅ | ~~已完成：后端全量测试通过~~ | ~~4-6h~~ 已完成 | ✅ 96 passed, 0 failed, 0 skipped |
 | **P0-2** | 运行真实业务评估 | `evaluate_business_flows.py` 未运行,需验证雇主背调对话流程 | 3h | 记录通过率（目标 85%+）+ 验证 HITL 流程 |
 | **P0-3** | 录制演示视频 | 只有截图，无完整流程演示 | 2h | 3 分钟视频：简历→匹配→面试→背调 |
 
@@ -239,21 +238,20 @@ runnable = models.worker_model.with_structured_output(WorkerDecision, method="fu
 
 **详细实施步骤：**
 
-#### ~~P0-1: 修复测试（优先级最高）~~ ✅ **已完成**
+#### ~~P0-1: 修复测试（优先级最高）~~ ✅ **已完成并复核**
 
 ```bash
-# ✅ 已完成修复（2026-10-05）
-# 修复内容：
-# 1. test_graph.py: 恢复 6 个 Supervisor 参数化测试的正常执行
-# 2. test_api.py: 恢复 6 个 SSE/checkpoint API 测试的正常执行
-# 3. 保留 pytest 导入，供其他异常断言和 fixture 使用
+# ✅ 复核结果（2026-10-05）
+# 1. 后端全量测试：96 passed, 0 failed, 0 skipped
+# 2. 关键回归组（test_graph.py、test_checkpoint.py、test_api.py）：48 passed
+# 3. 前端 typecheck 和 production build 均通过
 # 
-# 验收结果：
+# 后端验收命令：
 cd backend
-python -m pytest -v
-# ✅ 实际：93 passed, 0 skipped
+uv run python -m pytest -v
+# ✅ 实际：96 passed, 0 failed, 0 skipped（10.03s）
 # 
-# 详细报告：docs/test-fixes-2026-10-05.md
+# 历史修复记录：../docs/test-fixes-2026-10-05.md
 ```
 
 #### P0-2: 运行真实业务评估（预计 3h）
@@ -303,7 +301,7 @@ cp .env.example .env
 
 | ID | 任务 | 价值 | 工作量 | 验收标准 |
 |---|---|---|---|---|
-| **P1-1** | Supervisor 路由评估报告 | 补充量化指标（准确率） | 2h | 路由准确率 ≥ 90%（93 样本） |
+| **P1-1** | Supervisor 路由评估报告 | 补充量化指标（准确率） | 2h | 路由准确率 ≥ 90%（93 个样本） |
 | **P1-2** | 补充前端自动化测试 | 提升测试覆盖 | 6-8h | 5 个核心页面 Playwright 截图 |
 | **P1-3** | 完善 CHANGELOG | 展示功能演进 | 1h | 拆分版本历史（至少 3 个版本） |
 | **P1-4** | 补充架构图和 ER 图 | 提升文档完整度 | 3h | 数据库 ER 图 + API 时序图 |
@@ -318,11 +316,12 @@ cd backend
 python scripts/evaluate_supervisor_routes.py
 
 # 期望输出：
-# Overall accuracy: 92.47% (86/93)
+# 示例格式（以下数值尚未由当前复核运行产生）：
+# Overall accuracy: <accuracy>% (<correct>/<total>)
 # Per-worker accuracy:
-#   resume_worker: 100.0% (15/15)
-#   jd_worker: 93.3% (14/15)
-#   match_worker: 86.7% (13/15)
+#   resume_worker: <accuracy>% (<correct>/<total>)
+#   jd_worker: <accuracy>% (<correct>/<total>)
+#   match_worker: <accuracy>% (<correct>/<total>)
 #   ...
 ```
 
@@ -355,8 +354,9 @@ test('employer investigation', async ({ page }) => { ... });
 ### 第 1 周（P0 清单，目标：可投递）
 
 **周一（0.5 天）：** ✅ **已完成 (2026-10-05)**
-- [x] ~~修复 `test_graph.py` 编码问题（2h）~~ ✅
-- [x] ~~修复 `test_api.py` SSE/checkpoint 测试（2-4h）~~ ✅
+- [x] ~~复核 `test_graph.py` Supervisor 路由测试~~ ✅
+- [x] ~~复核 `test_api.py` SSE/checkpoint 测试~~ ✅
+- [x] 运行后端全量测试和前端 typecheck/build ✅
 - [ ] 配置真实模型，运行 `evaluate_business_flows.py`（2h）
 
 **周二（0.5 天）：**
@@ -368,7 +368,8 @@ test('employer investigation', async ({ page }) => { ... });
 - [ ] 整理简历素材（见第 5 节）
 
 **验收标准：**
-- ✅ 测试通过率 100%（93 passed, 0 skipped）
+- ✅ 后端测试通过率 100%（96 passed, 0 failed, 0 skipped）
+- ✅ 前端 TypeScript 类型检查和生产构建通过
 - [ ] 雇主背调对话流程验证通过（含 HITL 主体确认）
 - [ ] 业务评估通过率记录在案
 - [ ] 3 分钟演示视频
@@ -426,7 +427,7 @@ test('employer investigation', async ({ page }) => { ... });
 - Pydantic 结构化输出校验（如匹配分数 0-100 范围校验）
 
 **量化指标：**
-- 后端单测：93 passed, 0 skipped（100% 通过率，93 个用例全部实际执行）
+- 后端单测：96 passed, 0 failed, 0 skipped（100% 通过率，96 个用例全部实际执行）
 - Supervisor 路由准确率：待运行 93 个样本评估集后确认
 - 真实业务流程通过率：待配置真实模型并运行评估后确认
 - 简历解析和匹配评分 P95 延迟：待真实模型评估后统计
@@ -438,7 +439,7 @@ test('employer investigation', async ({ page }) => { ... });
 | 指标 | 当前状态 | 目标值 | 如何获取 |
 |---|---|---|---|
 | 测试覆盖率 | ❌ 无报告 | 70%+ | `pytest --cov=app --cov-report=term` |
-| 测试通过率 | ✅ **100%（93/93）** | 95%+ | ✅ 已达标（0 个跳过） |
+| 测试通过率 | ✅ **100%（96/96）** | 95%+ | ✅ 已达标（0 个失败、0 个跳过） |
 | Supervisor 路由准确率 | ❌ 无报告 | 90%+ | `python scripts/evaluate_supervisor_routes.py` |
 | 业务流程通过率 | ❌ 未运行 | 85%+ | `python scripts/evaluate_business_flows.py` |
 | 简历解析延迟（P95） | ❌ 无统计 | < 5s | 在评估脚本中加计时 |
@@ -446,8 +447,8 @@ test('employer investigation', async ({ page }) => { ... });
 | 代码行数 | ✅ 后端 3300 行 + 前端 400 行 | - | `wc -l` 统计 |
 
 **简历量化示例（补齐后）：**
-> - 实现 6 个智能体 Worker，Supervisor 路由准确率（待 93 样本评估验证）
-> - 后端单测通过率 100%（93 passed, 0 skipped），核心业务逻辑完全覆盖
+> - 实现 6 个智能体 Worker，Supervisor 路由准确率（待 93 个样本评估验证）
+> - 后端单测通过率 100%（96 passed, 0 failed, 0 skipped），核心业务逻辑回归测试通过
 > - 真实业务流程通过率和 P95 延迟（待真实模型评估验证）
 
 ---
@@ -456,9 +457,12 @@ test('employer investigation', async ({ page }) => { ... });
 
 ### 6.1 必须修复的问题
 
-**测试失败（P0）：**
-- [ ] `test_graph.py:23`：中文编码问题
-- [ ] `test_api.py:222, 404, 416, 436, 502, 517`：SSE/checkpoint 测试失败
+**测试回归复核：**
+- [x] `test_graph.py`：6 个 Supervisor 参数化用例已执行并通过
+- [x] `test_checkpoint.py`：7 个 checkpoint 用例已执行并通过
+- [x] `test_api.py`：25 个 API/SSE/流式/持久化用例已执行并通过
+- [x] 后端全量测试：96 passed, 0 failed, 0 skipped
+- [x] 当前环境未复现历史 `JsonPlusSerializer.dumps` 错误；依赖版本和生产环境仍需在升级后重新验证
 
 **缺失功能（P0）：**
 - [ ] 雇主背调前端 UI（`frontend/src/features/employer/EmployerPage.tsx`）
@@ -560,6 +564,6 @@ npm run dev
 
 ---
 
-**文档版本**：v1.0  
-**最后更新**：2026-10-05  
-**下次更新**：完成 P0 清单后（预计 2026-10-12）
+**文档版本**：v1.1
+**最后更新**：2026-10-05（重新运行测试后）
+**下次更新**：完成真实模型业务评估、路由评估和演示视频后

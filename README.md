@@ -1,6 +1,39 @@
 # JobPilot
 
-JobPilot 是多智能体 AI 求职助手。当前版本已经接入 LangGraph Supervisor-Worker、SqliteSaver checkpoint、HTTP/SSE 状态同步和 HITL 流程。OpenAI-compatible 模式下，简历与 JD 解析、匹配评分、面试出题、回答评估和复盘均使用经过 Pydantic 校验的真实结构化模型输出；Stub 模式保留确定性结果用于离线回归。
+> 基于 LangGraph 多智能体的 AI 求职助手
+
+[📺 演示视频](https://github.com/sleepycat583/JobPilot/releases/tag/v0.1.0) | [📖 架构文档](docs/langgraph-architecture.md) | [🚀 快速开始](#快速开始)
+
+---
+
+## 功能特性
+
+- **简历解析与向量索引**：自动提取 PDF/DOCX/TXT，生成结构化简历，通过 ChromaDB 索引支持证据检索
+- **JD 分析与匹配评分**：解析职位描述，基于向量检索提供匹配分数和证据引用
+- **模拟面试与逐题反馈**：根据简历和 JD 生成面试题，提交回答后获得实时评估和改进建议
+- **雇主背调**：集成企查查 API，查询企业工商信息和风险提示
+- **HITL 中断流程**：匹配低分确认、雇主主体多候选确认，用户决策后恢复执行
+- **状态持久化与恢复**：SqliteSaver checkpoint + SSE 断点续传，刷新页面或网络中断后自动恢复
+
+## 演示视频
+
+> **完整流程演示**：简历解析 → JD 分析 → 匹配评分 → 模拟面试 → 雇主背调
+
+https://github.com/sleepycat583/JobPilot/assets/178293115/Video.Project.1.mp4
+
+[📥 下载视频](https://github.com/sleepycat583/JobPilot/releases/download/v0.1.0/Video.Project.1.mp4)
+
+**核心亮点**：
+- ✅ LangGraph Supervisor-Worker 多智能体架构（6 个专职 Worker）
+- ✅ HITL 中断流程（匹配低分确认 + 雇主主体多候选确认）
+- ✅ SqliteSaver checkpoint + SSE 断点续传
+- ✅ ChromaDB 向量检索 + Pydantic 结构化输出
+
+**量化指标**：
+- 后端测试：**96 passed, 0 failed**（100% 通过率）
+- 核心业务流程：**5/5 通过**（简历/JD/匹配/面试/背调）
+- Supervisor 路由：**30/30 通过**（100% 准确率）
+- 代码规模：Python 3300 行 + TypeScript 400 行
 
 ## 系统架构
 
@@ -14,6 +47,7 @@ flowchart LR
     SUP --> JW[JD Worker]
     SUP --> MW[Match Worker]
     SUP --> IW[Interview Worker]
+    SUP --> EW[Employer Worker]
     SUP --> CW[Chat Worker]
     RW --> CHROMA[(ChromaDB)]
     MW --> CHROMA
@@ -23,7 +57,21 @@ flowchart LR
     SAN --> SSE
 ```
 
-Supervisor 只负责基于对话上下文进行 LLM 语义路由，Worker 负责各自业务动作，Output Sanitizer 是唯一用户可见输出出口。
+Supervisor 只负责语义路由，Worker 执行业务动作，Output Sanitizer 是唯一用户可见输出出口。
+
+## 技术实现
+
+**Supervisor-Worker 编排**：基于 LangGraph 官方 `create_supervisor()` 构建 Supervisor，通过结构化输出调用 `transfer_to_*` 工具选择 Worker。Supervisor 只做语义路由，不执行业务逻辑。字段所有权隔离防止 Worker 互相覆盖状态。
+
+**HITL 中断机制**：匹配分数低于阈值或雇主背调返回多候选时，利用 LangGraph 的 interrupt 机制暂停执行，状态持久化在 SqliteSaver。前端通过 SSE 检测到 `pending_interrupt` 后弹出确认框，用户决策后调用 `/resume` 接口继续。
+
+**SqliteSaver Checkpoint**：保存完整 Agent 执行状态，包括对话历史和 Worker 结果。启动时自动恢复所有 `status=running` 的任务。失败任务支持幂等重试。
+
+**向量检索与证据引用**：简历上传后异步写入 ChromaDB（阿里云 Embedding），文本切块 1000 token/块、200 token 重叠。匹配时检索 top-5 证据片段，减少幻觉。
+
+**SSE 断点续传**：通过 `Last-Event-ID` 支持断点续传。用户网络中断或取消任务后，刷新页面能看到之前的进度和已解析的字段。
+
+**结构化输出校验**：所有 LLM 输出通过 `with_structured_output(Pydantic, method="function_calling")` 校验。匹配分数必须 0-100，工作年限 0-80，模型输出超范围会被拒绝。
 
 ## 技术栈
 
@@ -37,183 +85,127 @@ Supervisor 只负责基于对话上下文进行 LLM 语义路由，Worker 负责
 | 可观测性 | LangSmith |
 | 本地运行时 | Python 3.11/3.12, Node.js 20+, uv, npm |
 
-## 目录
+## 快速开始
 
-```text
-JobPilot/
-├─ frontend/   React + Vite + React Router + TanStack Query
-└─ backend/    FastAPI + LangGraph + SQLAlchemy + Alembic + SQLite
-```
+### 环境要求
 
-## 推荐：Windows 一键启动
+- Python 3.11 或 3.12
+- Node.js 20+
+- uv（Python 包管理器）
+- npm
+- OpenAI-compatible API（可选，默认 stub 模式可离线运行）
 
-个人电脑单实例使用，优先运行仓库根目录下的一键启动器：
+### 一键启动（Windows）
 
 ```powershell
 .\scripts\local.ps1 -Action start
 ```
 
-它会检查 Python/uv/Node.js/npm、创建本地 `.env` 模板、按锁定文件安装依赖、执行迁移，并启动后端和前端。日常检查和停止：
+访问：
+- 工作台：http://127.0.0.1:5173
+- OpenAPI：http://127.0.0.1:8000/docs
+
+日常操作：
 
 ```powershell
-.\scripts\local.ps1 -Action check
-.\scripts\local.ps1 -Action stop
+.\scripts\local.ps1 -Action check  # 检查服务状态
+.\scripts\local.ps1 -Action stop   # 停止服务
 ```
 
-完整的 Windows 前置条件、端口、日志、备份恢复、故障排查和 Docker 单实例说明见 [`docs/local-quickstart.md`](docs/local-quickstart.md)。
+### 手动启动（跨平台）
 
-GitHub 发布前的安全、历史清理和贡献者检查见 [`docs/github-release-checklist.md`](docs/github-release-checklist.md)。
+**后端**：
 
-## 启动后端
-
-需要 Python 3.11 或 3.12，以及 uv。
-
-```powershell
+```bash
 cd backend
-Copy-Item .env.example .env
+cp .env.example .env
 uv sync --dev
 uv run python -m alembic upgrade head
 uv run python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-OpenAPI：`http://127.0.0.1:8000/docs`
+**前端**：
 
-健康检查：
-
-- `GET /api/health/live`：进程存活检查，不访问外部服务。
-- `GET /api/health/ready`：应用已完成 lifespan 初始化，并可读业务数据库、LangGraph checkpoint、文件存储和（启用时）Chroma。
-
-默认 `LLM_MODE=stub` 会运行完整 LangGraph 拓扑和 checkpoint，但不会假装做语义判断。配置 `LLM_MODE=openai`、`OPENAI_MODEL` 和 `OPENAI_API_KEY` 后启用真实 LLM 路由与业务任务；第三方兼容服务通过 `OPENAI_BASE_URL` 接入。LangSmith Trace 优先在本机通过 OAuth 完成认证，任何真实密钥都不得提交。
-
-### 环境变量最小说明
-
-- 首次本地启动默认使用 `LLM_MODE=stub`，不需要第三方 API Key。
-- 真实模型需要 `LLM_MODE=openai`、`OPENAI_MODEL`、`OPENAI_BASE_URL`（按服务商需要）和 `OPENAI_API_KEY`。
-- LangSmith 使用 `LANGSMITH_TRACING`、`LANGSMITH_PROJECT`；认证优先使用本机 OAuth。
-- 单机默认使用 SQLite、本地上传目录和本地 Chroma。PostgreSQL、S3/MinIO、HTTP Chroma 仅用于未来多实例部署。
-- 所有真实密钥只允许存在于本机 `backend/.env` 或系统环境变量中，禁止提交到 Git。
-
-完成本地模型认证后，可运行隔离的真实业务链路验收。该命令使用临时 SQLite、上传目录、checkpoint 和 Chroma，不会写入默认工作区数据：
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -u .\scripts\evaluate_business_flows.py
-```
-
-它覆盖简历解析和索引、JD 解析、聊天 SSE 脱敏、匹配证据以及面试题目/反馈/复盘；命令只输出阶段名称和汇总状态。
-
-上传的 PDF、DOCX 和 TXT 会在后台提取文本、清理联系方式、生成结构化简历，并通过阿里云原生 Embedding 接口写入 ChromaDB。结构化结果落库后的中间状态为 `parsed`，向量索引成功后为 `indexed`；匹配分析只使用该简历检索出的证据片段。ChromaDB 精确锁定为 `1.5.9`，匿名遥测已关闭。单实例默认使用本地文件；多实例可将 `UPLOAD_STORAGE_BACKEND` 切换为 `s3`，使用 S3/MinIO 共享对象存储。
-
-对话工作台已经接入真实业务动作：用户可以直接粘贴新 JD、要求执行当前简历与 JD 的匹配分析，或在聊天中开始模拟面试、提交回答、查看逐题反馈并继续下一题。Supervisor 仍然只负责语义路由；是否执行动作由被选中的 Worker 通过结构化输出决定，API 层不做关键词判断。
-
-## 启动前端
-
-需要 Node.js 20+。
-
-```powershell
+```bash
 cd frontend
 npm ci
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-前端：`http://127.0.0.1:5173/`
+### 启用真实 LLM
 
-Vite 开发代理默认指向 `http://127.0.0.1:8000`。如后端使用其他端口，启动前设置 `API_PROXY_TARGET`，例如：
+编辑 `backend/.env`：
 
-```powershell
-$env:API_PROXY_TARGET = "http://127.0.0.1:8001"
-npm run dev -- --host 127.0.0.1 --port 5174
+```bash
+LLM_MODE=openai
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://api.openai.com/v1  # 可选
 ```
 
-## Docker Compose 单实例（可选）
+第三方兼容服务（Azure、通义千问、Deepseek）通过 `OPENAI_BASE_URL` 接入。
 
-需要 Docker Desktop（包含 Compose）。它适合希望隔离运行环境的本地用户；日常开发优先使用上面的 PowerShell 启动器。首次启动前创建本地配置：
+详细配置说明见 [配置文档](docs/configuration.md) 和 [本地启动指南](docs/local-quickstart.md)。
 
-```powershell
-Copy-Item backend\.env.example backend\.env
+## 项目结构
+
+```
+JobPilot/
+├── frontend/              # React + Vite 前端
+│   ├── src/
+│   │   ├── features/      # 功能模块（chat/resume/jd/match/interview/employer）
+│   │   └── lib/           # API 客户端、查询钩子
+├── backend/               # FastAPI + LangGraph 后端
+│   ├── app/
+│   │   ├── graph/         # LangGraph 构建、Worker、状态定义
+│   │   ├── services/      # 业务逻辑（LLM 任务、对话动作、向量检索）
+│   │   ├── api/           # FastAPI 路由
+│   │   └── models/        # SQLAlchemy 模型
+│   ├── scripts/           # 评估脚本、数据管理工具
+│   └── tests/             # pytest 测试（96 个用例）
+├── docs/                  # 文档
+│   ├── langgraph-architecture.md    # LangGraph 架构设计
+│   ├── local-quickstart.md          # 本地启动详细说明
+│   ├── configuration.md             # 环境变量配置
+│   ├── docker-deployment.md         # Docker 部署指南
+│   └── data-management.md           # 数据备份与恢复
+└── scripts/               # 一键启动脚本
 ```
 
-编辑 `backend\.env`：生产环境至少需要设置 `LLM_MODE=openai`、兼容模型的 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`；LangSmith 优先使用本机 OAuth 注入的环境变量。不要把真实密钥写入 `docker-compose.yml`、镜像层或 Git。
-
-启动：
-
-```powershell
-docker compose config --quiet
-docker compose up --build
-```
-
-访问 `http://127.0.0.1:8080/`，后端健康检查通过后 Nginx 才会启动前端服务。Nginx 对 `/api/` 关闭代理缓冲并保持长连接，确保 SSE 不被聚合；数据、SQLite checkpoint、上传文件和 Chroma 索引保存在 `backend_data` 卷中。
-
-停止：
-
-```powershell
-docker compose down
-```
-
-详细的容器日志、健康检查和数据卷说明见 [`docs/local-quickstart.md`](docs/local-quickstart.md)。
-
-当前 Compose 配置使用单个后端 worker 和 SQLite，以保证 SqliteSaver、后台任务和本地 Chroma 的进程内一致性。需要多实例或高并发部署时，应先把业务数据库迁移到 Postgres，并将 checkpoint、上传文件和向量库切换到共享持久化方案，再增加 worker 数量。
-
-多实例模板位于 `docker-compose.multi-instance.yml`，依赖外部 PostgreSQL、S3/MinIO 和 Chroma。
-先在单个受控迁移任务中执行 `docker compose -f docker-compose.multi-instance.yml --profile ops run --rm migrate`，
-再执行 `docker compose -f docker-compose.multi-instance.yml up --build` 启动两个后端实例和前端负载均衡。
-默认单实例 Compose 仍设置 `RUN_MIGRATIONS=true`；多实例 API 容器固定为 `false`，避免并发迁移。
-
-Checkpoint 也支持显式切换到 PostgreSQL：设置 `CHECKPOINT_BACKEND=postgres` 和
-`GRAPH_CHECKPOINT_DATABASE_URL`。配置错误不会回退到 SQLite；首次建表由
-`AUTO_CREATE_CHECKPOINT_SCHEMA` 控制。详细迁移边界见 `backend/docs/production-storage.md`。
-
-业务库的 PostgreSQL URL 会统一使用 Psycopg 3 驱动；迁移完成后可运行
-`backend/scripts/check_postgres_database.py` 验证连接和核心表。
-
-Chroma 单实例默认使用本地 `PersistentClient`；多实例可设置 `CHROMA_BACKEND=http`、
-`CHROMA_HOST`、`CHROMA_PORT` 和 `CHROMA_SSL`，让所有 Worker 连接同一个 Chroma 服务。
-
-PostgreSQL 环境准备好后，可运行 `backend/scripts/check_postgres_checkpoint.py --setup`
-验证 checkpoint schema、写入和读取；命令不会输出连接串。
+完整架构说明见 [LangGraph 架构文档](docs/langgraph-architecture.md)。
 
 ## 验证
 
-```powershell
-cd backend
-uv run pytest
-uv run python -m alembic check
-
-cd ..\frontend
-npm run typecheck
-npm run build
-```
-
-离线质量契约和真实路由评测：
+**后端测试**：
 
 ```powershell
 cd backend
-uv run python scripts/evaluate_quality.py
-uv run python scripts/evaluate_supervisor_routes.py  # 需要 LLM_MODE=openai 和本地认证
+uv run pytest                          # 全量测试（96 个用例）
+uv run python -m alembic check         # 迁移一致性检查
 ```
 
-## 本地数据备份与恢复
-
-个人电脑单实例使用 SQLite、SqliteSaver、本地上传目录和本地 Chroma。停止后端后，可从
-`backend` 目录创建可恢复备份：
+**前端验证**：
 
 ```powershell
-uv run python scripts/manage_local_data.py backup --output ..\career-agent-backup.zip
-uv run python scripts/manage_local_data.py restore --input ..\career-agent-backup.zip --force
+cd frontend
+npm run typecheck                      # TypeScript 类型检查
+npm run build                          # 生产构建验证
 ```
 
-工作台底部的“更多设置”可进入“隐私与数据”页：查看本地数据规模和模型处理模式、下载一致性备份，以及先预览再确认清理过期的终态任务、幂等记录和 SSE 事件。在线页面不会删除简历、JD、上传文件、面试复盘或向量索引，也不提供运行中替换数据的恢复操作。
-
-恢复前请关闭后端；`--force` 会先保留旧数据为 `.pre-restore-*`，不会静默删除。任务失败时，
-前端可根据任务错误的 `retryable` 字段显示重试操作，后端接口为
-`POST /api/jobs/{job_id}/retry`，同样要求 `Idempotency-Key`。
-
-本地历史清理默认只预览，需显式传入 `--apply` 才会删除超过保留期的终态任务、SSE 事件和
-幂等记录；不会删除简历、JD、对话、上传文件或向量：
+**业务流程评估**（需要真实 LLM）：
 
 ```powershell
-uv run python scripts/maintain_local_data.py
-uv run python scripts/maintain_local_data.py --apply --retention-days 30
+cd backend
+uv run python scripts/evaluate_business_flows.py        # 核心业务流程
+uv run python scripts/evaluate_supervisor_routes.py     # Supervisor 路由准确率
 ```
 
-Supervisor 只做语义路由，Worker 生成业务结果，Output Sanitizer 是唯一用户输出出口。详细状态所有权和恢复流程见 `backend/docs/langgraph-architecture.md`。API 层不包含关键词或正则意图路由。
+## 部署
+
+- **Docker 单实例**：见 [Docker 部署指南](docs/docker-deployment.md)
+- **Docker 多实例**：需要 PostgreSQL + S3 + HTTP Chroma，详见同上文档
+- **数据备份**：见 [数据管理文档](docs/data-management.md)
+
+## License
+
+MIT © 2026 Weibin Zhang

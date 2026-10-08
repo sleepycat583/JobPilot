@@ -19,7 +19,11 @@
 
 > **完整流程演示**：简历解析 → JD 分析 → 匹配评分 → 模拟面试 → 雇主背调
 
-https://github.com/user-attachments/assets/7c3e8e3f-9f3a-4f3e-b8f5-c6f8a7d4e1c0
+
+
+https://github.com/user-attachments/assets/69d5c504-17f4-4d9a-b4fb-f2c79bd1fa64
+
+
 
 [📥 下载视频](https://github.com/sleepycat583/JobPilot/releases/download/v0.1.0/Video.Project.1.mp4)
 
